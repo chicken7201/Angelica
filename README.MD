@@ -20,6 +20,9 @@ Targets GL 3.3+ core profile
 * GL_QUADS → GL_TRIANGLES conversion
 * Automatic transformation of mod shaders that use compat-only GLSL builtins (`gl_ModelViewMatrix`, `texture2D`, etc.)
 
+## Fork changes
+
+This fork fixes GTNH Private Use Area glyph rendering when Angelica custom fonts are enabled.
 
 # Required Dependencies
 * [UniMixins](https://github.com/LegacyModdingMC/UniMixins/releases) >= 0.1.23
