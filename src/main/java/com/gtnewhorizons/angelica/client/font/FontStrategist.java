@@ -131,6 +131,10 @@ public class FontStrategist {
             return FontProviderUnicode.get();
         }
         if (customFontEnabled && !me.isSplash) {
+            // GTNH defines these glyphs in unicode_page_e0.png, so custom system fonts must not intercept them.
+            if (FontGlyphRanges.isGtnhPrivateUseGlyph(chr)) {
+                return FontProviderUnicode.get();
+            }
             FontProvider fp;
             fp = FontProviderCustom.getPrimary();
             if (fp.isGlyphAvailable(chr)) { return fp; }
