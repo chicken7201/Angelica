@@ -1,3 +1,8 @@
+## Project status
+
+This fork is no longer maintained because the custom PUA glyph rendering issue has been fixed in the official Angelica 2.1.55 release.
+
+
 # Angelica<img src="img/logo-readme.png" align="right">
 
 <sup>**[CurseForge](https://www.curseforge.com/minecraft/mc-mods/angelica) | [Modrinth](https://modrinth.com/mod/angelica)**</sup>
