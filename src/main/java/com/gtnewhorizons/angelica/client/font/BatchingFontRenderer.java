@@ -376,14 +376,16 @@ public class BatchingFontRenderer {
         pushQuadIdx();
     }
 
-    private void pushTexRect(float x, float y, float w, float h, float itOff, int rgba, float uStart, float vStart, float uSz, float vSz, boolean flipV) {
+    private void pushTexRect(float x, float y, float w, float h, float itOff, int rgba, float uStart, float vStart,
+        float uSz, float vSz, float sampleUStart, float sampleUEnd, float sampleVStart, float sampleVEnd,
+        boolean flipV) {
         ensureCapacity();
         float vTop = flipV ? vStart + vSz : vStart;
         float vBot = flipV ? vStart : vStart + vSz;
-        pushVtx(x + itOff, y, rgba, uStart, vTop, uStart, uStart + uSz, vStart, vStart + vSz);
-        pushVtx(x - itOff, y + h, rgba, uStart, vBot, uStart, uStart + uSz, vStart, vStart + vSz);
-        pushVtx(x + itOff + w, y, rgba, uStart + uSz, vTop, uStart, uStart + uSz, vStart, vStart + vSz);
-        pushVtx(x - itOff + w, y + h, rgba, uStart + uSz, vBot, uStart, uStart + uSz, vStart, vStart + vSz);
+        pushVtx(x + itOff, y, rgba, uStart, vTop, sampleUStart, sampleUEnd, sampleVStart, sampleVEnd);
+        pushVtx(x - itOff, y + h, rgba, uStart, vBot, sampleUStart, sampleUEnd, sampleVStart, sampleVEnd);
+        pushVtx(x + itOff + w, y, rgba, uStart + uSz, vTop, sampleUStart, sampleUEnd, sampleVStart, sampleVEnd);
+        pushVtx(x - itOff + w, y + h, rgba, uStart + uSz, vBot, sampleUStart, sampleUEnd, sampleVStart, sampleVEnd);
         pushQuadIdx();
     }
 
@@ -1437,6 +1439,10 @@ public class BatchingFontRenderer {
                     continue;
                 }
 
+                if (!fontProvider.isGlyphAvailable(chr)) {
+                    continue;
+                }
+
                 if (curRainbow) {
                     int rgbEffect = RAINBOW_LUT[rainbowCharIndex % RAINBOW_LUT_SIZE];
                     curColor = (curColor & 0xFF000000) | rgbEffect;
@@ -1460,6 +1466,10 @@ public class BatchingFontRenderer {
                 final float glyphW = fontProvider.getGlyphW(chr) * glyphScaleX;
                 final float uSz = fontProvider.getUSize(chr);
                 final float vSz = fontProvider.getVSize(chr);
+                final float sampleUStart = fontProvider.getSampleUStart(chr);
+                final float sampleUEnd = fontProvider.getSampleUEnd(chr);
+                final float sampleVStart = fontProvider.getSampleVStart(chr);
+                final float sampleVEnd = fontProvider.getSampleVEnd(chr);
                 final float itOff = curItalic ? 1.0F : 0.0F; // italic offset
                 final float shadowOffset = fontProvider.getShadowOffset();
                 final int shadowCopies = FontConfig.shadowCopies;
@@ -1481,20 +1491,20 @@ public class BatchingFontRenderer {
                         : curShadowColor;
                     for (int n = 1; n <= shadowCopies; n++) {
                         final float shadowOffsetPart = shadowOffset * ((float) n / shadowCopies);
-                        pushTexRect(curX + shadowOffsetPart, renderY + shadowOffsetPart, glyphW - 1.0f, heightSouth, itOff, effectiveShadowColor, uStart, vStart, uSz, vSz, curDinnerbone);
+                        pushTexRect(curX + shadowOffsetPart, renderY + shadowOffsetPart, glyphW - 1.0f, heightSouth, itOff, effectiveShadowColor, uStart, vStart, uSz, vSz, sampleUStart, sampleUEnd, sampleVStart, sampleVEnd, curDinnerbone);
 
                         if (curBold) {
-                            pushTexRect(curX + 2.0f * shadowOffsetPart, renderY + shadowOffsetPart, glyphW - 1.0f, heightSouth, itOff, effectiveShadowColor, uStart, vStart, uSz, vSz, curDinnerbone);
+                            pushTexRect(curX + 2.0f * shadowOffsetPart, renderY + shadowOffsetPart, glyphW - 1.0f, heightSouth, itOff, effectiveShadowColor, uStart, vStart, uSz, vSz, sampleUStart, sampleUEnd, sampleVStart, sampleVEnd, curDinnerbone);
                         }
                     }
                 }
 
-                pushTexRect(curX, renderY, glyphW - 1.0f, heightSouth, itOff, curColor, uStart, vStart, uSz, vSz, curDinnerbone);
+                pushTexRect(curX, renderY, glyphW - 1.0f, heightSouth, itOff, curColor, uStart, vStart, uSz, vSz, sampleUStart, sampleUEnd, sampleVStart, sampleVEnd, curDinnerbone);
 
                 if (curBold) {
                     for (int n = 1; n <= boldCopies; n++) {
                         final float shadowOffsetPart = shadowOffset * ((float) n / boldCopies);
-                        pushTexRect(curX + shadowOffsetPart, renderY, glyphW - 1.0f, heightSouth, itOff, curColor, uStart, vStart, uSz, vSz, curDinnerbone);
+                        pushTexRect(curX + shadowOffsetPart, renderY, glyphW - 1.0f, heightSouth, itOff, curColor, uStart, vStart, uSz, vSz, sampleUStart, sampleUEnd, sampleVStart, sampleVEnd, curDinnerbone);
                     }
                 }
 
@@ -1562,7 +1572,7 @@ public class BatchingFontRenderer {
 
         FontProvider fp = FontStrategist.getFontProvider(this, chr, FontConfig.enableCustomFont, underlying.getUnicodeFlag());
 
-        return fp.getXAdvance(chr) * this.getGlyphScaleX();
+        return fp.isGlyphAvailable(chr) ? fp.getXAdvance(chr) * this.getGlyphScaleX() : 0.0F;
     }
 
     public void overrideBlendFunc(int srcRgb, int dstRgb) {
