@@ -7,6 +7,7 @@ import net.minecraft.client.resources.IResourceManager;
 import net.minecraft.client.resources.IResourceManagerReloadListener;
 import net.minecraft.util.ResourceLocation;
 
+import java.io.DataInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 
@@ -19,14 +20,20 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
 
     @Override
     public void onResourceManagerReload(IResourceManager resourceManager) {
-        try {
-            InputStream inputstream = resourceManager.getResource(new ResourceLocation("font/glyph_sizes.bin")).getInputStream();
-            //noinspection ResultOfMethodCallIgnored
-            inputstream.read(this.glyphWidth);
+        try (InputStream inputstream = resourceManager.getResource(new ResourceLocation("font/glyph_sizes.bin")).getInputStream()) {
+            final byte[] loadedGlyphWidth = readGlyphWidths(inputstream);
+            System.arraycopy(loadedGlyphWidth, 0, this.glyphWidth, 0, this.glyphWidth.length);
         }
         catch (IOException ioexception) {
             throw new RuntimeException(ioexception);
         }
+    }
+
+    /** Reads the complete glyph_sizes.bin table even when the stream returns short chunks. */
+    static byte[] readGlyphWidths(InputStream inputstream) throws IOException {
+        final byte[] loadedGlyphWidth = new byte[UnicodeGlyphMetrics.GLYPH_COUNT];
+        new DataInputStream(inputstream).readFully(loadedGlyphWidth);
+        return loadedGlyphWidth;
     }
 
     private static class InstLoader { static final FontProviderUnicode instance = new FontProviderUnicode(); }
@@ -50,7 +57,7 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
 
     @Override
     public boolean isGlyphAvailable(char chr) {
-        return true;
+        return UnicodeGlyphMetrics.isAvailable(this.glyphWidth[chr]);
     }
 
     @Override
@@ -60,47 +67,56 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
 
     @Override
     public float getUStart(char chr) {
-        final float startColumnF = (float)((this.glyphWidth[chr] >>> 4) & 15);
-        return ((float) (chr % 16 * 16) + startColumnF + 0.21f) / 256.0f;
+        return UnicodeGlyphMetrics.getUStart(chr, this.glyphWidth[chr]);
     }
 
     @Override
     public float getVStart(char chr) {
-        return ((float) ((chr & 255) / 16 * 16) + 0.21f) / 256.0f;
+        return UnicodeGlyphMetrics.getVStart(chr);
     }
 
     @Override
     public float getXAdvance(char chr) {
-        final int startColumn = (this.glyphWidth[chr] >>> 4) & 15;
-        final int endColumn = this.glyphWidth[chr] & 15;
-        final float startColumnF = (float) startColumn;
-        final float endColumnF = (float) (endColumn + 1);
-        return (endColumnF - startColumnF) / 2.0F + 1.0F;
+        return UnicodeGlyphMetrics.getXAdvance(this.glyphWidth[chr]);
     }
 
     @Override
     public float getGlyphW(char chr) {
-        final int startColumn = (this.glyphWidth[chr] >>> 4) & 15;
-        final int endColumn = this.glyphWidth[chr] & 15;
-        final float startColumnF = (float) startColumn;
-        final float endColumnF = (float) (endColumn + 1);
-        final float chrWidth = endColumnF - startColumnF - 0.02F;
-        return chrWidth / 2.0f + 1.0f;
+        return UnicodeGlyphMetrics.getGlyphWidth(this.glyphWidth[chr]);
     }
 
     @Override
     public float getUSize(char chr) {
-        final int startColumn = (this.glyphWidth[chr] >>> 4) & 15;
-        final int endColumn = this.glyphWidth[chr] & 15;
-        final float startColumnF = (float) startColumn;
-        final float endColumnF = (float) (endColumn + 1);
-        final float chrWidth = endColumnF - startColumnF - 0.02F;
-        return (chrWidth - 0.42f) / 256.0f;
+        return UnicodeGlyphMetrics.getUSize(this.glyphWidth[chr]);
     }
 
     @Override
     public float getVSize(char chr) {
-        return (16.0f - 0.42f) / 256.0f;
+        return UnicodeGlyphMetrics.getVSize();
+    }
+
+    /** Keeps anti-aliasing samples inside the glyph's fixed 16-pixel atlas cell. */
+    @Override
+    public float getSampleUStart(char chr) {
+        return UnicodeGlyphMetrics.getSampleUStart(chr);
+    }
+
+    /** Keeps anti-aliasing samples away from the next horizontal atlas cell. */
+    @Override
+    public float getSampleUEnd(char chr) {
+        return UnicodeGlyphMetrics.getSampleUEnd(chr);
+    }
+
+    /** Keeps anti-aliasing samples inside the glyph's fixed 16-pixel atlas cell. */
+    @Override
+    public float getSampleVStart(char chr) {
+        return UnicodeGlyphMetrics.getSampleVStart(chr);
+    }
+
+    /** Keeps anti-aliasing samples away from the next vertical atlas cell. */
+    @Override
+    public float getSampleVEnd(char chr) {
+        return UnicodeGlyphMetrics.getSampleVEnd(chr);
     }
 
     @Override
