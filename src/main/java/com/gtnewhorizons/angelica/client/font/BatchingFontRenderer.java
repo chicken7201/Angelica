@@ -312,7 +312,7 @@ public class BatchingFontRenderer {
         if (batchCommands.size() > batchSealedEnd) {
             final FontDrawCmd lastCmd = batchCommands.get(batchCommands.size() - 1);
             final int prevEndVtx = lastCmd.startVtx + lastCmd.idxCount;
-            if (prevEndVtx == startIdx && lastCmd.texture == texture) {
+            if (prevEndVtx == startIdx && lastCmd.texture == texture && lastCmd.isUnicode == isUnicode) {
                 // Coalesce into one
                 lastCmd.idxCount += idxCount;
                 return;
@@ -657,8 +657,13 @@ public class BatchingFontRenderer {
     private static boolean flushTextureChanged;
 
     private static void drawCommands(FontDrawCmd[] cmdsData, int from, int to, BatchingFontRenderer owner) {
+        int discardedUnicodeCommands = 0;
         for (int i = from; i < to; i++) {
             final FontDrawCmd cmd = cmdsData[i];
+            if (cmd.isUnicode && !FontProviderUnicode.get().prepareTextureForBind(cmd.texture)) {
+                discardedUnicodeCommands++;
+                continue;
+            }
             if (!Objects.equals(flushLastTexture, cmd.texture)) {
                 if (flushLastTexture == null) {
                     GLStateManager.glEnable(GL11.GL_TEXTURE_2D);
@@ -672,6 +677,9 @@ public class BatchingFontRenderer {
                 flushLastTexture = cmd.texture;
             }
             GLStateManager.glDrawElements(GL11.GL_TRIANGLES, cmd.idxCount, GL11.GL_UNSIGNED_SHORT, (long) cmd.startVtx * 2L);
+        }
+        if (discardedUnicodeCommands > 0) {
+            FontProviderUnicode.get().logDiscardedBatch(discardedUnicodeCommands);
         }
     }
 
@@ -1001,8 +1009,18 @@ public class BatchingFontRenderer {
                     continue;
                 }
 
-                if (!fontProvider.isGlyphAvailable(chr)) {
-                    continue;
+                final boolean isUnicodeProvider = fontProvider instanceof FontProviderUnicode;
+                final FontProviderUnicode.GlyphRenderInfo unicodeGlyph;
+                if (isUnicodeProvider) {
+                    unicodeGlyph = ((FontProviderUnicode) fontProvider).getRenderInfo(chr);
+                    if (unicodeGlyph == null) {
+                        continue;
+                    }
+                } else {
+                    unicodeGlyph = null;
+                    if (!fontProvider.isGlyphAvailable(chr)) {
+                        continue;
+                    }
                 }
 
                 if (curRainbow) {
@@ -1022,21 +1040,34 @@ public class BatchingFontRenderer {
                     gradientCharIndex++;
                 }
 
-                final float uStart = fontProvider.getUStart(chr);
-                final float vStart = fontProvider.getVStart(chr);
-                final float xAdvance = fontProvider.getXAdvance(chr) * glyphScaleX;
-                final float glyphW = fontProvider.getGlyphW(chr) * glyphScaleX;
-                final float uSz = fontProvider.getUSize(chr);
-                final float vSz = fontProvider.getVSize(chr);
-                final float sampleUStart = fontProvider.getSampleUStart(chr);
-                final float sampleUEnd = fontProvider.getSampleUEnd(chr);
-                final float sampleVStart = fontProvider.getSampleVStart(chr);
-                final float sampleVEnd = fontProvider.getSampleVEnd(chr);
+                final float uStart = isUnicodeProvider ? unicodeGlyph.uStart : fontProvider.getUStart(chr);
+                final float vStart = isUnicodeProvider ? unicodeGlyph.vStart : fontProvider.getVStart(chr);
+                final float xAdvance = (isUnicodeProvider ? unicodeGlyph.xAdvance : fontProvider.getXAdvance(chr))
+                    * glyphScaleX;
+                final float glyphW = (isUnicodeProvider ? unicodeGlyph.glyphWidth : fontProvider.getGlyphW(chr))
+                    * glyphScaleX;
+                final float uSz = isUnicodeProvider ? unicodeGlyph.uSize : fontProvider.getUSize(chr);
+                final float vSz = isUnicodeProvider ? unicodeGlyph.vSize : fontProvider.getVSize(chr);
+                final float sampleUStart = isUnicodeProvider
+                    ? unicodeGlyph.sampleUStart
+                    : fontProvider.getSampleUStart(chr);
+                final float sampleUEnd = isUnicodeProvider ? unicodeGlyph.sampleUEnd : fontProvider.getSampleUEnd(chr);
+                final float sampleVStart = isUnicodeProvider
+                    ? unicodeGlyph.sampleVStart
+                    : fontProvider.getSampleVStart(chr);
+                final float sampleVEnd = isUnicodeProvider ? unicodeGlyph.sampleVEnd : fontProvider.getSampleVEnd(chr);
                 final float itOff = curItalic ? 1.0F : 0.0F; // italic offset
                 final float shadowOffset = fontProvider.getShadowOffset();
                 final int shadowCopies = FontConfig.shadowCopies;
                 final int boldCopies = FontConfig.boldCopies;
-                final ResourceLocation texture = fontProvider.getTexture(chr);
+                final ResourceLocation texture = isUnicodeProvider ? unicodeGlyph.texture : fontProvider.getTexture(chr);
+                if (isUnicodeProvider && texture == null) {
+                    curX += (xAdvance + (curBold ? 1.0f : 0.0f)) + getGlyphSpacing();
+                    if (bookMode) { curX = (int) curX; }
+                    underlineEndX = curX;
+                    strikethroughEndX = curX;
+                    continue;
+                }
                 final int idxId = idxWriterIndex;
 
                 // Wave: Y offset via sine wave
@@ -1081,7 +1112,7 @@ public class BatchingFontRenderer {
                 if (drawShadow) { charCount += shadowCopies * (curBold ? 2 : 1); }
                 if (curBold) { charCount += boldCopies; }
                 final int vtxCount = 4 * charCount;
-                pushDrawCmd(idxId, vtxCount / 2 * 3, texture, chr > 255);
+                pushDrawCmd(idxId, vtxCount / 2 * 3, texture, isUnicodeProvider);
 
                 curX += (xAdvance + (curBold ? 1.0f : 0.0f)) + getGlyphSpacing();
                 if (bookMode) { curX = (int) curX; }
