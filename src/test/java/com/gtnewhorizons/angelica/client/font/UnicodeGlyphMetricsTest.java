@@ -25,6 +25,7 @@ class UnicodeGlyphMetricsTest {
         assertTrue(UnicodeGlyphMetrics.isAvailable(packedBounds));
         assertEquals(4, UnicodeGlyphMetrics.getStartColumn(packedBounds));
         assertEquals(13, UnicodeGlyphMetrics.getEndColumnExclusive(packedBounds));
+        assertEquals(9, UnicodeGlyphMetrics.getBitmapWidth(packedBounds));
     }
 
     /** Verifies empty or inverted glyph_sizes.bin entries remain unavailable. */

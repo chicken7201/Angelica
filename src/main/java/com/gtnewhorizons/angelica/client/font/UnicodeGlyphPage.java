@@ -157,6 +157,12 @@ final class UnicodeGlyphPage {
         return (getCellLeft(glyph) + this.glyphLeft[glyph]) / (float) this.imageWidth;
     }
 
+    /** Returns the left UV encoded by glyph_sizes.bin at the composed page resolution. */
+    float getDeclaredUStart(int glyph, byte packedBounds) {
+        return (getCellLeft(glyph) + getPhysicalColumn(UnicodeGlyphMetrics.getStartColumn(packedBounds)))
+            / this.imageWidth;
+    }
+
     /** Returns the top UV of the glyph's fixed atlas cell. */
     float getVStart(int glyph) {
         return getCellTop(glyph) / (float) this.imageHeight;
@@ -168,6 +174,12 @@ final class UnicodeGlyphPage {
         return bitmapWidth == 0 ? 0.0F : (bitmapWidth - TEXEL_EDGE_GUARD) / this.imageWidth;
     }
 
+    /** Returns the horizontal UV span encoded by glyph_sizes.bin without atlas padding. */
+    float getDeclaredUSize(byte packedBounds) {
+        final float bitmapWidth = getPhysicalColumn(UnicodeGlyphMetrics.getBitmapWidth(packedBounds));
+        return bitmapWidth == 0.0F ? 0.0F : (bitmapWidth - TEXEL_EDGE_GUARD) / this.imageWidth;
+    }
+
     /** Returns the UV height of one Unicode cell without sampling the next cell. */
     float getVSize() {
         return (this.cellHeight - TEXEL_EDGE_GUARD) / this.imageHeight;
@@ -176,13 +188,25 @@ final class UnicodeGlyphPage {
     /** Returns the screen quad width independently of cursor advance and atlas sample padding. */
     float getGlyphWidth(int glyph) {
         final float logicalBitmapWidth = getLogicalBitmapWidth(glyph);
-        final float logicalGuard = TEXEL_EDGE_GUARD * LOGICAL_CELL_SIZE / this.cellWidth;
-        return logicalBitmapWidth == 0.0F ? 1.0F : (logicalBitmapWidth - logicalGuard) / 2.0F + 1.0F;
+        return getScreenGlyphWidth(logicalBitmapWidth);
     }
 
-    /** Returns cursor advance derived from the composed bitmap rather than stale glyph_sizes.bin bounds. */
-    float getXAdvance(int glyph) {
-        final float logicalBitmapWidth = getLogicalBitmapWidth(glyph);
+    /** Returns the screen quad width encoded by glyph_sizes.bin independently of cursor advance. */
+    float getDeclaredGlyphWidth(byte packedBounds) {
+        return getScreenGlyphWidth(UnicodeGlyphMetrics.getBitmapWidth(packedBounds));
+    }
+
+    /** Returns cursor advance without shrinking below either the bitmap or glyph_sizes.bin width. */
+    float getXAdvance(int glyph, byte packedBounds) {
+        final float logicalBitmapWidth = Math.max(
+            getLogicalBitmapWidth(glyph),
+            UnicodeGlyphMetrics.getBitmapWidth(packedBounds));
+        return logicalBitmapWidth == 0.0F ? 0.0F : logicalBitmapWidth / 2.0F + 1.0F;
+    }
+
+    /** Returns cursor advance encoded by glyph_sizes.bin for a matching custom glyph resource. */
+    float getDeclaredXAdvance(byte packedBounds) {
+        final float logicalBitmapWidth = UnicodeGlyphMetrics.getBitmapWidth(packedBounds);
         return logicalBitmapWidth == 0.0F ? 0.0F : logicalBitmapWidth / 2.0F + 1.0F;
     }
 
@@ -214,6 +238,17 @@ final class UnicodeGlyphPage {
     /** Returns the glyph's visible width in the logical 16-pixel Unicode cell coordinate system. */
     private float getLogicalBitmapWidth(int glyph) {
         return getBitmapWidth(glyph) * (float) LOGICAL_CELL_SIZE / this.cellWidth;
+    }
+
+    /** Converts a logical 16-pixel column count to the composed page resolution. */
+    private float getPhysicalColumn(int logicalColumn) {
+        return logicalColumn * (float) this.cellWidth / LOGICAL_CELL_SIZE;
+    }
+
+    /** Converts a logical bitmap width to the renderer's screen quad width. */
+    private float getScreenGlyphWidth(float logicalBitmapWidth) {
+        final float logicalGuard = TEXEL_EDGE_GUARD * LOGICAL_CELL_SIZE / this.cellWidth;
+        return logicalBitmapWidth == 0.0F ? 1.0F : (logicalBitmapWidth - logicalGuard) / 2.0F + 1.0F;
     }
 
     /** Returns the glyph cell's left coordinate in physical texture pixels. */
