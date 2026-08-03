@@ -28,7 +28,7 @@ class UnicodeGlyphPageTest {
 
         assertTrue(page.isGlyphAvailable(glyph));
         assertEquals(10, page.getBitmapWidth(glyph));
-        assertEquals(6.0F, page.getXAdvance(glyph), EPSILON);
+        assertEquals(6.0F, page.getXAdvance(glyph, packBounds(0, 5)), EPSILON);
         assertEquals(5.99F, page.getGlyphWidth(glyph), EPSILON);
         assertEquals(cellLeft(glyph) / (float) PAGE_SIZE, page.getUStart(glyph), EPSILON);
         assertTrue(page.getUStart(glyph) + page.getUSize(glyph)
@@ -76,7 +76,7 @@ class UnicodeGlyphPageTest {
         final int glyph = '◀' & 255;
 
         assertEquals(28, page.getBitmapWidth(glyph));
-        assertEquals(8.0F, page.getXAdvance(glyph), EPSILON);
+        assertEquals(8.0F, page.getXAdvance(glyph, packBounds(1, 6)), EPSILON);
     }
 
     /** Verifies requested ordinary, subscript, formula, triangle, and snowflake cells include both edge texels. */
@@ -100,8 +100,44 @@ class UnicodeGlyphPageTest {
             assertTrue(uEnd >= lastTexelCenter, Character.toString(chr));
             assertTrue(page.getSampleUStart(glyph) <= page.getUStart(glyph), Character.toString(chr));
             assertTrue(page.getSampleUEnd(glyph) >= uEnd, Character.toString(chr));
-            assertEquals(9.0F, page.getXAdvance(glyph), EPSILON, Character.toString(chr));
+            assertEquals(9.0F, page.getXAdvance(glyph, packBounds(1, 6)), EPSILON, Character.toString(chr));
         }
+    }
+
+    /** Verifies declared bearing width is retained when visible ink is narrower than glyph_sizes.bin. */
+    @Test
+    void preservesDeclaredAdvanceForNarrowInk() {
+        final BufferedImage image = newPage(PAGE_SIZE);
+        fillGlyph(image, '\uE011', 2, 5, 1, 8, 0xFFFFFFFF);
+        final UnicodeGlyphPage page = UnicodeGlyphPage.compose(Collections.singletonList(image));
+        final int glyph = '\uE011' & 255;
+        final byte packedBounds = packBounds(2, 6);
+
+        assertEquals(3, page.getBitmapWidth(glyph));
+        assertEquals(3.5F, page.getXAdvance(glyph, packedBounds), EPSILON);
+        assertEquals(3.5F, page.getDeclaredXAdvance(packedBounds), EPSILON);
+        assertEquals((cellLeft(glyph) + 2) / (float) PAGE_SIZE,
+            page.getDeclaredUStart(glyph, packedBounds), EPSILON);
+        assertEquals((5.0F - UnicodeGlyphPage.TEXEL_EDGE_GUARD) / PAGE_SIZE,
+            page.getDeclaredUSize(packedBounds), EPSILON);
+    }
+
+    /** Verifies GTNH metadata can isolate a custom glyph from unrelated pixels elsewhere in its atlas cell. */
+    @Test
+    void constrainsCustomGlyphRenderingToDeclaredBounds() {
+        final BufferedImage image = newPage(PAGE_SIZE);
+        fillGlyph(image, '\uE018', 1, 15, 0, 1, 0xFFFFFFFF);
+        fillGlyph(image, '\uE018', 2, 7, 1, 8, 0xFFFFFFFF);
+        final UnicodeGlyphPage page = UnicodeGlyphPage.compose(Collections.singletonList(image));
+        final int glyph = '\uE018' & 255;
+        final byte packedBounds = packBounds(2, 6);
+
+        assertEquals(14, page.getBitmapWidth(glyph));
+        assertEquals(8.0F, page.getXAdvance(glyph, packedBounds), EPSILON);
+        assertEquals(3.5F, page.getDeclaredXAdvance(packedBounds), EPSILON);
+        assertEquals(3.49F, page.getDeclaredGlyphWidth(packedBounds), EPSILON);
+        assertTrue(page.getDeclaredUStart(glyph, packedBounds) + page.getDeclaredUSize(packedBounds)
+            < (cellLeft(glyph) + 14.0F) / PAGE_SIZE);
     }
 
     /** Verifies an atlas cell with no visible pixels is rejected as a missing glyph. */
@@ -110,7 +146,7 @@ class UnicodeGlyphPageTest {
         final UnicodeGlyphPage page = UnicodeGlyphPage.compose(Collections.singletonList(newPage(PAGE_SIZE)));
 
         assertFalse(page.isGlyphAvailable('❄' & 255));
-        assertEquals(0.0F, page.getXAdvance('❄' & 255), EPSILON);
+        assertEquals(0.0F, page.getXAdvance('❄' & 255, (byte) 0), EPSILON);
     }
 
     /** Creates a transparent square Unicode page at the requested resolution. */
@@ -141,5 +177,10 @@ class UnicodeGlyphPageTest {
     /** Returns one glyph cell's top coordinate in the 256-pixel test page. */
     private static int cellTop(int glyph) {
         return glyph / UnicodeGlyphPage.GRID_SIZE * CELL_SIZE;
+    }
+
+    /** Packs inclusive glyph columns into the glyph_sizes.bin representation. */
+    private static byte packBounds(int startColumn, int endColumn) {
+        return (byte) (startColumn << 4 | endColumn);
     }
 }

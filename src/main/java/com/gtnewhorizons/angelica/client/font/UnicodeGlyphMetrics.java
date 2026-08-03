@@ -22,4 +22,9 @@ final class UnicodeGlyphMetrics {
         return (packedBounds & 15) + 1;
     }
 
+    /** Returns the horizontal bitmap width declared by glyph_sizes.bin. */
+    static int getBitmapWidth(byte packedBounds) {
+        return isAvailable(packedBounds) ? getEndColumnExclusive(packedBounds) - getStartColumn(packedBounds) : 0;
+    }
+
 }

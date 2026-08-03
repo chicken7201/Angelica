@@ -143,10 +143,13 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
         return chr;
     }
 
-    /** Returns the composed glyph bitmap's left UV. */
+    /** Returns the composed bitmap UV, preserving declared GTNH custom-glyph bearings. */
     @Override
     public float getUStart(char chr) {
-        return getPage(chr).metrics.getUStart(chr & 255);
+        final UnicodeGlyphPage metrics = getPage(chr).metrics;
+        return FontGlyphRanges.isGtnhPrivateUseGlyph(chr)
+            ? metrics.getDeclaredUStart(chr & 255, this.glyphWidth[chr])
+            : metrics.getUStart(chr & 255);
     }
 
     /** Returns the composed glyph cell's top UV. */
@@ -155,22 +158,31 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
         return getPage(chr).metrics.getVStart(chr & 255);
     }
 
-    /** Returns cursor advance from actual bitmap bounds without atlas padding. */
+    /** Returns cursor advance separately from atlas bounds and padding. */
     @Override
     public float getXAdvance(char chr) {
-        return getPage(chr).metrics.getXAdvance(chr & 255);
+        final UnicodeGlyphPage metrics = getPage(chr).metrics;
+        return FontGlyphRanges.isGtnhPrivateUseGlyph(chr)
+            ? metrics.getDeclaredXAdvance(this.glyphWidth[chr])
+            : metrics.getXAdvance(chr & 255, this.glyphWidth[chr]);
     }
 
-    /** Returns the screen quad width from actual bitmap bounds. */
+    /** Returns the screen quad width from the selected bitmap bounds. */
     @Override
     public float getGlyphW(char chr) {
-        return getPage(chr).metrics.getGlyphWidth(chr & 255);
+        final UnicodeGlyphPage metrics = getPage(chr).metrics;
+        return FontGlyphRanges.isGtnhPrivateUseGlyph(chr)
+            ? metrics.getDeclaredGlyphWidth(this.glyphWidth[chr])
+            : metrics.getGlyphWidth(chr & 255);
     }
 
-    /** Returns the composed glyph bitmap's horizontal UV span. */
+    /** Returns the composed bitmap UV span, preserving GTNH custom-glyph bounds. */
     @Override
     public float getUSize(char chr) {
-        return getPage(chr).metrics.getUSize(chr & 255);
+        final UnicodeGlyphPage metrics = getPage(chr).metrics;
+        return FontGlyphRanges.isGtnhPrivateUseGlyph(chr)
+            ? metrics.getDeclaredUSize(this.glyphWidth[chr])
+            : metrics.getUSize(chr & 255);
     }
 
     /** Returns one composed Unicode cell's vertical UV span. */
