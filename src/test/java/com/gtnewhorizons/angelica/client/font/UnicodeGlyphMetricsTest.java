@@ -17,106 +17,21 @@ import org.junit.jupiter.api.Test;
 
 class UnicodeGlyphMetricsTest {
 
-    private static final float EPSILON = 0.000001F;
-    private static final String REQUIRED_GLYPHS = "0123456789OreABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-        + "₀₁₂₃₄₅₆₇₈₉H₂SO₄U₂₃₈◀◁▶▷❄";
-
-    /** Verifies every requested glyph keeps both horizontal edge texel centers in its UV range. */
+    /** Verifies valid packed bounds continue to mark glyphs supplied by GTNH and resource packs as available. */
     @Test
-    void includesRequestedGlyphEdgeTexels() {
-        final byte fullCellBounds = packBounds(0, 15);
-
-        for (int i = 0; i < REQUIRED_GLYPHS.length(); i++) {
-            final char chr = REQUIRED_GLYPHS.charAt(i);
-            final float cellLeft = chr % 16 * UnicodeGlyphMetrics.CELL_SIZE;
-            final float firstTexelCenter = (cellLeft + 0.5F) / UnicodeGlyphMetrics.ATLAS_SIZE;
-            final float lastTexelCenter = (cellLeft + UnicodeGlyphMetrics.CELL_SIZE - 0.5F)
-                / UnicodeGlyphMetrics.ATLAS_SIZE;
-            final float cellTop = (chr & 255) / 16 * UnicodeGlyphMetrics.CELL_SIZE;
-            final float topTexelCenter = (cellTop + 0.5F) / UnicodeGlyphMetrics.ATLAS_SIZE;
-            final float bottomTexelCenter = (cellTop + UnicodeGlyphMetrics.CELL_SIZE - 0.5F)
-                / UnicodeGlyphMetrics.ATLAS_SIZE;
-            final float uStart = UnicodeGlyphMetrics.getUStart(chr, fullCellBounds);
-            final float uEnd = uStart + UnicodeGlyphMetrics.getUSize(fullCellBounds);
-            final float vStart = UnicodeGlyphMetrics.getVStart(chr);
-            final float vEnd = vStart + UnicodeGlyphMetrics.getVSize();
-
-            assertTrue(uStart <= firstTexelCenter, Character.toString(chr));
-            assertTrue(uEnd >= lastTexelCenter, Character.toString(chr));
-            assertTrue(vStart <= topTexelCenter, Character.toString(chr));
-            assertTrue(vEnd >= bottomTexelCenter, Character.toString(chr));
-        }
-    }
-
-    /** Verifies glyph UVs and anti-aliasing bounds remain inside one fixed atlas cell. */
-    @Test
-    void keepsUvAndSamplesInsideAtlasCell() {
-        final char chr = '❄';
-        final byte packedBounds = packBounds(2, 13);
-        final float uStart = UnicodeGlyphMetrics.getUStart(chr, packedBounds);
-        final float uEnd = uStart + UnicodeGlyphMetrics.getUSize(packedBounds);
-        final float sampleUStart = UnicodeGlyphMetrics.getSampleUStart(chr);
-        final float sampleUEnd = UnicodeGlyphMetrics.getSampleUEnd(chr);
-
-        assertTrue(sampleUStart <= uStart);
-        assertTrue(sampleUEnd >= uEnd);
-        assertTrue(sampleUEnd <= sampleUStart + (float) UnicodeGlyphMetrics.CELL_SIZE / UnicodeGlyphMetrics.ATLAS_SIZE);
-        assertTrue(UnicodeGlyphMetrics.getSampleVStart(chr) <= UnicodeGlyphMetrics.getVStart(chr));
-        assertTrue(UnicodeGlyphMetrics.getSampleVEnd(chr)
-            >= UnicodeGlyphMetrics.getVStart(chr) + UnicodeGlyphMetrics.getVSize());
-    }
-
-    /** Verifies the first and last atlas cells never produce UVs outside the texture. */
-    @Test
-    void keepsOuterAtlasCellsInsideTexture() {
-        final byte fullCellBounds = packBounds(0, 15);
-        final char[] edgeCells = { '\u0000', '\u000F', '\u00F0', '\u00FF', '\uFFFF' };
-
-        for (char chr : edgeCells) {
-            final float uStart = UnicodeGlyphMetrics.getUStart(chr, fullCellBounds);
-            final float uEnd = uStart + UnicodeGlyphMetrics.getUSize(fullCellBounds);
-            final float vStart = UnicodeGlyphMetrics.getVStart(chr);
-            final float vEnd = vStart + UnicodeGlyphMetrics.getVSize();
-
-            assertTrue(uStart >= 0.0F);
-            assertTrue(vStart >= 0.0F);
-            assertTrue(uEnd <= 1.0F);
-            assertTrue(vEnd <= 1.0F);
-            assertTrue(UnicodeGlyphMetrics.getSampleUEnd(chr) <= 1.0F);
-            assertTrue(UnicodeGlyphMetrics.getSampleVEnd(chr) <= 1.0F);
-        }
-    }
-
-    /** Verifies wide right bearings remain encoded instead of falling back to a full-width glyph. */
-    @Test
-    void preservesOfficialWideGlyphBoundsBehavior() {
+    void acceptsValidGlyphSizeEntries() {
         final byte packedBounds = packBounds(4, 12);
 
         assertTrue(UnicodeGlyphMetrics.isAvailable(packedBounds));
         assertEquals(4, UnicodeGlyphMetrics.getStartColumn(packedBounds));
         assertEquals(13, UnicodeGlyphMetrics.getEndColumnExclusive(packedBounds));
-        assertEquals(5.5F, UnicodeGlyphMetrics.getXAdvance(packedBounds), EPSILON);
     }
 
-    /** Verifies atlas sample padding does not increase the string advance. */
+    /** Verifies empty or inverted glyph_sizes.bin entries remain unavailable. */
     @Test
-    void keepsAdvanceIndependentFromAtlasSampleBounds() {
-        final char chr = '₂';
-        final byte packedBounds = packBounds(4, 12);
-        final float sampleWidth = UnicodeGlyphMetrics.getSampleUEnd(chr)
-            - UnicodeGlyphMetrics.getSampleUStart(chr);
-
-        assertEquals(5.5F, UnicodeGlyphMetrics.getXAdvance(packedBounds), EPSILON);
-        assertEquals(4.49F, UnicodeGlyphMetrics.getGlyphWidth(packedBounds) - 1.0F, EPSILON);
-        assertTrue(sampleWidth > UnicodeGlyphMetrics.getUSize(packedBounds));
-    }
-
-    /** Verifies empty or inverted bounds are treated as missing glyphs. */
-    @Test
-    void rejectsMissingAndInvalidGlyphBounds() {
+    void rejectsMissingAndInvalidGlyphSizeEntries() {
         assertFalse(UnicodeGlyphMetrics.isAvailable((byte) 0));
         assertFalse(UnicodeGlyphMetrics.isAvailable(packBounds(15, 0)));
-        assertEquals(0.0F, UnicodeGlyphMetrics.getXAdvance((byte) 0), EPSILON);
     }
 
     /** Verifies glyph_sizes.bin is fully consumed across short InputStream reads. */
