@@ -17,6 +17,8 @@ final class UnicodeGlyphPage {
     private final int cellHeight;
     private final short[] glyphLeft = new short[PAGE_GLYPH_COUNT];
     private final short[] glyphRight = new short[PAGE_GLYPH_COUNT];
+    private final short[] glyphTop = new short[PAGE_GLYPH_COUNT];
+    private final short[] glyphBottom = new short[PAGE_GLYPH_COUNT];
 
     /** Creates metrics for one composed Unicode texture page. */
     private UnicodeGlyphPage(BufferedImage image) {
@@ -115,7 +117,7 @@ final class UnicodeGlyphPage {
         }
     }
 
-    /** Scans the composed alpha channel to cache each glyph's actual horizontal bitmap bounds. */
+    /** Scans the composed alpha channel to cache each glyph's actual bitmap bounds. */
     private void scanGlyphBounds() {
         final int[] pixels = this.image.getRGB(0, 0, this.imageWidth, this.imageHeight, null, 0, this.imageWidth);
 
@@ -124,6 +126,8 @@ final class UnicodeGlyphPage {
             final int cellTop = glyph / GRID_SIZE * this.cellHeight;
             int left = this.cellWidth;
             int right = 0;
+            int top = this.cellHeight;
+            int bottom = 0;
 
             for (int y = 0; y < this.cellHeight; y++) {
                 final int rowOffset = (cellTop + y) * this.imageWidth + cellLeft;
@@ -131,13 +135,121 @@ final class UnicodeGlyphPage {
                     if ((pixels[rowOffset + x] >>> 24) != 0) {
                         left = Math.min(left, x);
                         right = Math.max(right, x + 1);
+                        top = Math.min(top, y);
+                        bottom = Math.max(bottom, y + 1);
                     }
                 }
             }
 
             this.glyphLeft[glyph] = (short) left;
             this.glyphRight[glyph] = (short) right;
+            this.glyphTop[glyph] = (short) top;
+            this.glyphBottom[glyph] = (short) bottom;
         }
+    }
+
+    /** Selects a complete resource-layer subscript family whose zero uses the GTNH subscript-zero bounds. */
+    int alignSubscriptDigitsToReference(List<BufferedImage> layers, UnicodeGlyphPage reference) {
+        if (this.image == null || reference == null || layers == null || layers.isEmpty()) {
+            return 0;
+        }
+
+        final int referenceGlyph = FontGlyphRanges.GTNH_SUBSCRIPT_ZERO & 255;
+        if (!reference.isGlyphAvailable(referenceGlyph)) {
+            return 0;
+        }
+        if (hasSubscriptFamilyMatchingReference(reference, referenceGlyph)) {
+            return 0;
+        }
+
+        for (int layerIndex = layers.size() - 1; layerIndex >= 0; layerIndex--) {
+            final UnicodeGlyphPage candidate = new UnicodeGlyphPage(layers.get(layerIndex));
+            if (!candidate.hasSubscriptFamilyMatchingReference(reference, referenceGlyph)) {
+                continue;
+            }
+
+            final int[] targetPixels = this.image.getRGB(
+                0,
+                0,
+                this.imageWidth,
+                this.imageHeight,
+                null,
+                0,
+                this.imageWidth);
+            final int[] sourcePixels = candidate.image.getRGB(
+                0,
+                0,
+                candidate.imageWidth,
+                candidate.imageHeight,
+                null,
+                0,
+                candidate.imageWidth);
+            for (char chr = FontGlyphRanges.UNICODE_SUBSCRIPT_DIGIT_START;
+                chr <= FontGlyphRanges.UNICODE_SUBSCRIPT_DIGIT_END; chr++) {
+                copyGlyphCell(
+                    sourcePixels,
+                    candidate.imageWidth,
+                    candidate.cellWidth,
+                    candidate.cellHeight,
+                    targetPixels,
+                    this.imageWidth,
+                    this.cellWidth,
+                    this.cellHeight,
+                    chr & 255);
+            }
+            this.image.setRGB(0, 0, this.imageWidth, this.imageHeight, targetPixels, 0, this.imageWidth);
+            scanGlyphBounds();
+            return FontGlyphRanges.UNICODE_SUBSCRIPT_DIGIT_END
+                - FontGlyphRanges.UNICODE_SUBSCRIPT_DIGIT_START + 1;
+        }
+        return 0;
+    }
+
+    /** Returns whether a complete subscript family shares the reference zero's box and vertical placement. */
+    private boolean hasSubscriptFamilyMatchingReference(UnicodeGlyphPage reference, int referenceGlyph) {
+        final int zeroGlyph = FontGlyphRanges.UNICODE_SUBSCRIPT_DIGIT_START & 255;
+        if (!isGlyphAvailable(zeroGlyph) || !hasSameLogicalBounds(zeroGlyph, reference, referenceGlyph)) {
+            return false;
+        }
+        for (char chr = FontGlyphRanges.UNICODE_SUBSCRIPT_DIGIT_START;
+            chr <= FontGlyphRanges.UNICODE_SUBSCRIPT_DIGIT_END; chr++) {
+            final int glyph = chr & 255;
+            if (!isGlyphAvailable(glyph)
+                || !hasSameScaledBoundary(
+                    this.glyphTop[glyph],
+                    this.cellHeight,
+                    reference.glyphTop[referenceGlyph],
+                    reference.cellHeight)
+                || !hasSameScaledBoundary(
+                    this.glyphBottom[glyph],
+                    this.cellHeight,
+                    reference.glyphBottom[referenceGlyph],
+                    reference.cellHeight)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Compares two glyph boxes in cell-relative coordinates without assuming equal atlas resolutions. */
+    private boolean hasSameLogicalBounds(int glyph, UnicodeGlyphPage other, int otherGlyph) {
+        return hasSameScaledBoundary(this.glyphLeft[glyph], this.cellWidth, other.glyphLeft[otherGlyph], other.cellWidth)
+            && hasSameScaledBoundary(
+                this.glyphRight[glyph],
+                this.cellWidth,
+                other.glyphRight[otherGlyph],
+                other.cellWidth)
+            && hasSameScaledBoundary(this.glyphTop[glyph], this.cellHeight, other.glyphTop[otherGlyph], other.cellHeight)
+            && hasSameScaledBoundary(
+                this.glyphBottom[glyph],
+                this.cellHeight,
+                other.glyphBottom[otherGlyph],
+                other.cellHeight);
+    }
+
+    /** Compares one normalized cell boundary using exact integer cross multiplication. */
+    private static boolean hasSameScaledBoundary(int boundary, int cellSize, int otherBoundary, int otherCellSize) {
+        return boundary * otherCellSize == otherBoundary * cellSize;
     }
 
     /** Transfers the composed bitmap to the texture uploader without retaining a duplicate image in the metrics cache. */
@@ -233,6 +345,16 @@ final class UnicodeGlyphPage {
     /** Returns the glyph's visible width in physical texture pixels. */
     int getBitmapWidth(int glyph) {
         return Math.max(0, this.glyphRight[glyph] - this.glyphLeft[glyph]);
+    }
+
+    /** Returns the glyph's visible top boundary relative to its atlas cell. */
+    int getBitmapTop(int glyph) {
+        return this.glyphTop[glyph];
+    }
+
+    /** Returns the glyph's visible bottom boundary relative to its atlas cell. */
+    int getBitmapBottom(int glyph) {
+        return this.glyphBottom[glyph];
     }
 
     /** Returns the glyph's visible width in the logical 16-pixel Unicode cell coordinate system. */
