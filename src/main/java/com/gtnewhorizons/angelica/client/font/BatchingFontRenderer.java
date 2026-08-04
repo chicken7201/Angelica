@@ -204,19 +204,10 @@ public class BatchingFontRenderer {
         return (argb & 0xFF000000) | (red << 16) | (green << 8) | blue;
     }
 
-    /**
-     * True only for a perspective projection (world-space text: signs, nameplates, etc).
-     * GUI/HUD text uses an orthographic projection and must never be shaded by world lighting -
-     * mods rely on getting back the exact color they requested (e.g. GTNHLib's ColorResource).
-     */
-    private static boolean isWorldSpaceText() {
-        return GLStateManager.getProjectionMatrix().m33() == 0.0f;
-    }
-
     private void captureLightmapState() {
         final int unitBinding = GLStateManager.getTextures().getTextureUnitBindings(LIGHTMAP_TEX_UNIT).getBinding();
 
-        final boolean active = isWorldSpaceText() && unitBinding != 0;
+        final boolean active = GLStateManager.getProjectionMatrix().m33() == 0.0f && unitBinding != 0;
 
         float u = 0.0f;
         float v = 0.0f;
@@ -495,6 +486,7 @@ public class BatchingFontRenderer {
         }
     }
 
+    /** Resolves the model-view matrix captured for the current batch. */
     private void resolveModelView(Matrix4f dest) {
         dest.set(batchMatrixValid ? batchModelView : GLStateManager.getModelViewMatrix());
     }
@@ -547,6 +539,7 @@ public class BatchingFontRenderer {
         }
     }
 
+    /** Reports whether text should wait for the active TESR or model-part batch. */
     private static boolean shouldDeferNow() {
         if (!GLStateManager.isMainThread()) return false;
         return TesrBatchRenderer.INSTANCE.hasPendingGeometry() || ModelPartBatcher.INSTANCE.isActive();
@@ -582,22 +575,40 @@ public class BatchingFontRenderer {
         batchMatrixValid = false;
     }
 
+    /** Flushes deferred text segments while holding Unicode texture reload protection when needed. */
     public static void flushDeferredText() {
         if (deferredSegments.isEmpty()) return;
 
-        if (deferredSegments.getFirst().owner.shouldDrawThroughPipeline()) {
-            flushDeferredThroughPipeline();
+        int unicodeCommands = 0;
+        for (int i = 0, n = deferredSegments.size(); i < n; i++) {
+            final TextSegment segment = deferredSegments.get(i);
+            unicodeCommands += countUnicodeCommands(
+                segment.owner.batchCommands.elements(), segment.cmdStart, segment.cmdEnd);
+        }
+        if (unicodeCommands > 0 && !UnicodeTextureLifecycle.tryBeginTextureUse()) {
+            discardDeferredText();
+            FontProviderUnicode.get().logDiscardedBatch(unicodeCommands);
             return;
         }
 
-        GLStateManager.beginForeignDraw();
         try {
-            flushDeferredTextInner();
+            if (deferredSegments.getFirst().owner.shouldDrawThroughPipeline()) {
+                flushDeferredThroughPipeline();
+                return;
+            }
+
+            GLStateManager.beginForeignDraw();
+            try {
+                flushDeferredTextInner();
+            } finally {
+                GLStateManager.endForeignDraw();
+            }
         } finally {
-            GLStateManager.endForeignDraw();
+            if (unicodeCommands > 0) UnicodeTextureLifecycle.endTextureUse();
         }
     }
 
+    /** Replays deferred text through the active Iris pipeline while preserving effective GL state. */
     private static void flushDeferredThroughPipeline() {
         final BatchingFontRenderer first = deferredSegments.getFirst().owner;
         final boolean isTextureEnabledBefore = GLStateManager.glIsEnabled(GL11.GL_TEXTURE_2D);
@@ -664,6 +675,7 @@ public class BatchingFontRenderer {
         }
     }
 
+    /** Draws deferred text with the font shader and restores all captured GL state afterward. */
     private static void flushDeferredTextInner() {
         uploadVertexData(deferredVertexPos);
 
@@ -744,7 +756,15 @@ public class BatchingFontRenderer {
     private int fontAAModeLast = -1;
     private int fontAAStrengthLast = -1;
 
+    /** Flushes current commands while preserving deferred commands and coordinating Unicode texture reloads. */
     private void flushBatch() {
+        final int unicodeCommands = countUnicodeCommands();
+        if (unicodeCommands > 0 && !UnicodeTextureLifecycle.tryBeginTextureUse()) {
+            truncateBatchToWatermark();
+            FontProviderUnicode.get().logDiscardedBatch(unicodeCommands);
+            return;
+        }
+
         final boolean locked = GLStateManager.acquireDrawLock();
         try {
             if (shouldDrawThroughPipeline()) {
@@ -759,9 +779,25 @@ public class BatchingFontRenderer {
             }
         } finally {
             if (locked) GLStateManager.releaseDrawLock();
+            if (unicodeCommands > 0) UnicodeTextureLifecycle.endTextureUse();
         }
     }
 
+    /** Counts Unicode commands so their validation, bind, and draw share one reload-safe lifecycle section. */
+    private int countUnicodeCommands() {
+        return countUnicodeCommands(batchCommands.elements(), deferredCmdWatermark, batchCommands.size());
+    }
+
+    /** Counts Unicode commands in the specified draw-command range. */
+    private static int countUnicodeCommands(FontDrawCmd[] commands, int from, int to) {
+        int unicodeCommands = 0;
+        for (int i = from; i < to; i++) {
+            if (commands[i].isUnicode) unicodeCommands++;
+        }
+        return unicodeCommands;
+    }
+
+    /** Reports whether text must be replayed through Iris instead of the optimized font shader path. */
     private boolean shouldDrawThroughPipeline() {
         if (FontConfig.fontAAMode != 0) {
             return false;
@@ -895,22 +931,26 @@ public class BatchingFontRenderer {
     private static float flushLastLightmapV;
     private static boolean flushLastLightmapActive;
 
+    /** Invalidates the cached lightmap uniforms before a font flush. */
     private static void resetFlushLightmap() {
         flushLastLightmapU = Float.NaN;
         flushLastLightmapV = Float.NaN;
         flushLastLightmapActive = false;
     }
 
+    /** Returns the texture currently bound to the lightmap texture unit. */
     private static int boundLightmapTexture() {
         return GLStateManager.getTextures().getTextureUnitBindings(LIGHTMAP_TEX_UNIT).getBinding();
     }
 
+    /** Binds a texture to the lightmap unit and restores the default active unit. */
     private static void bindLightmapTexture(int texture) {
         GLStateManager.glActiveTexture(GL13.GL_TEXTURE0 + LIGHTMAP_TEX_UNIT);
         GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, texture);
         GLStateManager.glActiveTexture(GL13.GL_TEXTURE0);
     }
 
+    /** Uploads changed lightmap state and ensures the captured lightmap is bound. */
     private static void uploadLightmap(int uniformLocation, boolean active, float u, float v, int texture) {
         if (u != flushLastLightmapU || v != flushLastLightmapV || active != flushLastLightmapActive) {
             GLStateManager.glUniform3f(uniformLocation, u, v, active ? 1.0f : 0.0f);
@@ -923,13 +963,20 @@ public class BatchingFontRenderer {
         }
     }
 
+    /** Validates texture state and draws one contiguous range of font commands. */
     private static void drawCommands(FontDrawCmd[] cmdsData, int from, int to, BatchingFontRenderer owner) {
         int discardedUnicodeCommands = 0;
         for (int i = from; i < to; i++) {
             final FontDrawCmd cmd = cmdsData[i];
-            if (cmd.isUnicode && !FontProviderUnicode.get().prepareTextureForBind(cmd.texture)) {
-                discardedUnicodeCommands++;
-                continue;
+            final int unicodeTextureId;
+            if (cmd.isUnicode) {
+                unicodeTextureId = FontProviderUnicode.get().prepareTextureForBind(cmd.texture);
+                if (unicodeTextureId == -1) {
+                    discardedUnicodeCommands++;
+                    continue;
+                }
+            } else {
+                unicodeTextureId = -1;
             }
             if (!Objects.equals(flushLastTexture, cmd.texture)) {
                 if (flushLastTexture == null) {
@@ -938,7 +985,11 @@ public class BatchingFontRenderer {
                     GLStateManager.glDisable(GL11.GL_TEXTURE_2D);
                 }
                 if (cmd.texture != null) {
-                    ((FontRendererAccessor) owner.underlying).angelica$bindTexture(cmd.texture);
+                    if (cmd.isUnicode) {
+                        GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, unicodeTextureId);
+                    } else {
+                        ((FontRendererAccessor) owner.underlying).angelica$bindTexture(cmd.texture);
+                    }
                     flushTextureChanged = true;
                 }
                 flushLastTexture = cmd.texture;
@@ -982,6 +1033,7 @@ public class BatchingFontRenderer {
         }
     }
 
+    /** Replays the current text batch through Iris while preserving the optimized path's batching boundaries. */
     private void flushBatchThroughPipeline() {
         final int cmdCount = batchCommands.size();
         final int segmentCount = batchSegments.size();
@@ -1069,12 +1121,16 @@ public class BatchingFontRenderer {
         int packedLight, float normalX, float normalY, float normalZ) {
         final Tessellator tessellator = Tessellator.instance;
         ResourceLocation lastTexture = DUMMY_RESOURCE_LOCATION;
+        boolean lastWasUnicode = false;
         boolean textureChanged = false;
         boolean drawing = false;
+        int discardedUnicodeCommands = 0;
         try {
             for (int i = from; i < to; i++) {
                 final FontDrawCmd cmd = cmdsData[i];
-                if (!Objects.equals(lastTexture, cmd.texture)) {
+                final boolean stateChanged = !Objects.equals(lastTexture, cmd.texture)
+                    || lastWasUnicode != cmd.isUnicode;
+                if (stateChanged) {
                     if (drawing) {
                         tessellator.draw();
                         drawing = false;
@@ -1083,10 +1139,23 @@ public class BatchingFontRenderer {
                         GLStateManager.disableTexture();
                     } else {
                         GLStateManager.enableTexture();
-                        ((FontRendererAccessor) owner.underlying).angelica$bindTexture(cmd.texture);
+                        if (cmd.isUnicode) {
+                            final int unicodeTextureId = FontProviderUnicode.get().prepareTextureForBind(cmd.texture);
+                            if (unicodeTextureId == -1) {
+                                discardedUnicodeCommands++;
+                                lastTexture = DUMMY_RESOURCE_LOCATION;
+                                lastWasUnicode = false;
+                                textureChanged = true;
+                                continue;
+                            }
+                            GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, unicodeTextureId);
+                        } else {
+                            ((FontRendererAccessor) owner.underlying).angelica$bindTexture(cmd.texture);
+                        }
                         textureChanged = true;
                     }
                     lastTexture = cmd.texture;
+                    lastWasUnicode = cmd.isUnicode;
                 }
                 if (!drawing) {
                     tessellator.startDrawingQuads();
@@ -1101,9 +1170,13 @@ public class BatchingFontRenderer {
                 tessellator.draw();
             }
         }
+        if (discardedUnicodeCommands > 0) {
+            FontProviderUnicode.get().logDiscardedBatch(discardedUnicodeCommands);
+        }
         return textureChanged;
     }
 
+    /** Emits every quad represented by one batched draw command into the Tessellator. */
     private void emitCommand(Tessellator tessellator, FontDrawCmd cmd) {
         final int firstVertex = cmd.startVtx / 6 * 4;
         final int quadCount = cmd.idxCount / 6;
@@ -1117,6 +1190,7 @@ public class BatchingFontRenderer {
         }
     }
 
+    /** Copies one packed font vertex into the Tessellator. */
     private void emitVertex(Tessellator tessellator, long ptr) {
         tessellator.setColorRGBA(
             memGetByte(ptr + 16) & 0xFF,
@@ -1255,7 +1329,7 @@ public class BatchingFontRenderer {
 
         this.beginBatch();
         this.captureLightmapState();
-        this.lightingFactorActive = isWorldSpaceText() && FFPVertexLighting.modulatesVertexColor(this.lightingFactor);
+        this.lightingFactorActive = FFPVertexLighting.modulatesVertexColor(this.lightingFactor);
         float curX = anchorX;
         try {
             final int totalStringLength = string.length();
