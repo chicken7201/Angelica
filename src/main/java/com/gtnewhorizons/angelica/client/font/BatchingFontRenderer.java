@@ -1288,9 +1288,12 @@ public class BatchingFontRenderer {
 
             float glyphScaleY = getGlyphScaleY();
             float glyphScaleX = getGlyphScaleX();
-            float heightNorth = anchorY + (underlying.FONT_HEIGHT - 1.0f) * (0.5f - glyphScaleY / 2);
+            final float defaultHeightNorth = anchorY
+                + (underlying.FONT_HEIGHT - 1.0f) * (0.5f - glyphScaleY / 2);
+            float heightNorth = defaultHeightNorth;
 
             final float underlineY = heightNorth + (underlying.FONT_HEIGHT - 1.0f) * glyphScaleY;
+            final float fontBaselineY = underlineY - glyphScaleY;
             float underlineStartX = 0.0f;
             float underlineEndX = 0.0f;
 
@@ -1435,8 +1438,13 @@ public class BatchingFontRenderer {
                 }
 
                 FontProvider fontProvider = FontStrategist.getFontProvider(this, chr, FontConfig.enableCustomFont, unicodeFlag);
+                final boolean isCustomProvider = fontProvider instanceof FontProviderCustom;
 
-                heightNorth = anchorY + (underlying.FONT_HEIGHT - 1.0f) * (0.5f - glyphScaleY * fontProvider.getYScaleMultiplier() / 2);
+                heightNorth = isCustomProvider
+                    ? defaultHeightNorth
+                    : anchorY
+                        + (underlying.FONT_HEIGHT - 1.0f)
+                            * (0.5f - glyphScaleY * fontProvider.getYScaleMultiplier() / 2);
                 float heightSouth = (underlying.FONT_HEIGHT - 1.0f) * glyphScaleY * fontProvider.getYScaleMultiplier();
 
                 visibleCharIndex++;
@@ -1449,13 +1457,22 @@ public class BatchingFontRenderer {
 
                 final boolean isUnicodeProvider = fontProvider instanceof FontProviderUnicode;
                 final FontProviderUnicode.GlyphRenderInfo unicodeGlyph;
+                final FontProviderCustom.GlyphRenderInfo customGlyph;
                 if (isUnicodeProvider) {
                     unicodeGlyph = ((FontProviderUnicode) fontProvider).getRenderInfo(chr);
+                    customGlyph = null;
                     if (unicodeGlyph == null) {
+                        continue;
+                    }
+                } else if (isCustomProvider) {
+                    unicodeGlyph = null;
+                    customGlyph = ((FontProviderCustom) fontProvider).getRenderInfo(chr);
+                    if (customGlyph == null) {
                         continue;
                     }
                 } else {
                     unicodeGlyph = null;
+                    customGlyph = null;
                     if (!fontProvider.isGlyphAvailable(chr)) {
                         continue;
                     }
@@ -1478,14 +1495,29 @@ public class BatchingFontRenderer {
                     gradientCharIndex++;
                 }
 
-                final float uStart = isUnicodeProvider ? unicodeGlyph.uStart : fontProvider.getUStart(chr);
-                final float vStart = isUnicodeProvider ? unicodeGlyph.vStart : fontProvider.getVStart(chr);
-                final float xAdvance = (isUnicodeProvider ? unicodeGlyph.xAdvance : fontProvider.getXAdvance(chr))
-                    * glyphScaleX;
-                final float glyphW = (isUnicodeProvider ? unicodeGlyph.glyphWidth : fontProvider.getGlyphW(chr))
-                    * glyphScaleX;
-                final float uSz = isUnicodeProvider ? unicodeGlyph.uSize : fontProvider.getUSize(chr);
-                final float vSz = isUnicodeProvider ? unicodeGlyph.vSize : fontProvider.getVSize(chr);
+                final float uStart = isUnicodeProvider
+                    ? unicodeGlyph.uStart
+                    : isCustomProvider ? customGlyph.uStart : fontProvider.getUStart(chr);
+                final float vStart = isUnicodeProvider
+                    ? unicodeGlyph.vStart
+                    : isCustomProvider ? customGlyph.vStart : fontProvider.getVStart(chr);
+                final float xAdvance = (isUnicodeProvider
+                    ? unicodeGlyph.xAdvance
+                    : isCustomProvider ? customGlyph.xAdvance : fontProvider.getXAdvance(chr)) * glyphScaleX;
+                final float drawX = curX + (isCustomProvider ? customGlyph.drawOffsetX * glyphScaleX : 0.0F);
+                final float drawY = isCustomProvider
+                    ? fontBaselineY + customGlyph.drawOffsetY * glyphScaleY
+                    : heightNorth;
+                final float drawWidth = isCustomProvider
+                    ? customGlyph.drawWidth * glyphScaleX
+                    : (isUnicodeProvider ? unicodeGlyph.glyphWidth : fontProvider.getGlyphW(chr)) * glyphScaleX - 1.0F;
+                final float drawHeight = isCustomProvider ? customGlyph.drawHeight * glyphScaleY : heightSouth;
+                final float uSz = isUnicodeProvider
+                    ? unicodeGlyph.uSize
+                    : isCustomProvider ? customGlyph.uSize : fontProvider.getUSize(chr);
+                final float vSz = isUnicodeProvider
+                    ? unicodeGlyph.vSize
+                    : isCustomProvider ? customGlyph.vSize : fontProvider.getVSize(chr);
                 final float sampleUStart = isUnicodeProvider
                     ? unicodeGlyph.sampleUStart
                     : fontProvider.getSampleUStart(chr);
@@ -1498,7 +1530,9 @@ public class BatchingFontRenderer {
                 final float shadowOffset = fontProvider.getShadowOffset();
                 final int shadowCopies = FontConfig.shadowCopies;
                 final int boldCopies = FontConfig.boldCopies;
-                final ResourceLocation texture = isUnicodeProvider ? unicodeGlyph.texture : fontProvider.getTexture(chr);
+                final ResourceLocation texture = isUnicodeProvider
+                    ? unicodeGlyph.texture
+                    : isCustomProvider ? customGlyph.texture : fontProvider.getTexture(chr);
                 if (isUnicodeProvider && texture == null) {
                     curX += (xAdvance + (curBold ? 1.0f : 0.0f)) + getGlyphSpacing();
                     if (bookMode) { curX = (int) curX; }
@@ -1509,7 +1543,7 @@ public class BatchingFontRenderer {
                 final int idxId = idxWriterIndex;
 
                 // Wave: Y offset via sine wave
-                float renderY = heightNorth;
+                float renderY = drawY;
                 if (curWave) {
                     float time = HUDCaching.renderingCacheOverride ? 0f : (float) ((System.nanoTime() & 0xFFFFFFFFFFFFL) * WAVE_TIME_SCALE);
                     renderY += (float) Math.sin(visibleCharIndex * WAVE_FREQUENCY + time) * AngelicaConfig.waveAmplitude;
@@ -1522,20 +1556,20 @@ public class BatchingFontRenderer {
                         : curShadowColor;
                     for (int n = 1; n <= shadowCopies; n++) {
                         final float shadowOffsetPart = shadowOffset * ((float) n / shadowCopies);
-                        pushTexRect(curX + shadowOffsetPart, renderY + shadowOffsetPart, glyphW - 1.0f, heightSouth, itOff, effectiveShadowColor, uStart, vStart, uSz, vSz, sampleUStart, sampleUEnd, sampleVStart, sampleVEnd, curDinnerbone);
+                        pushTexRect(drawX + shadowOffsetPart, renderY + shadowOffsetPart, drawWidth, drawHeight, itOff, effectiveShadowColor, uStart, vStart, uSz, vSz, sampleUStart, sampleUEnd, sampleVStart, sampleVEnd, curDinnerbone);
 
                         if (curBold) {
-                            pushTexRect(curX + 2.0f * shadowOffsetPart, renderY + shadowOffsetPart, glyphW - 1.0f, heightSouth, itOff, effectiveShadowColor, uStart, vStart, uSz, vSz, sampleUStart, sampleUEnd, sampleVStart, sampleVEnd, curDinnerbone);
+                            pushTexRect(drawX + 2.0f * shadowOffsetPart, renderY + shadowOffsetPart, drawWidth, drawHeight, itOff, effectiveShadowColor, uStart, vStart, uSz, vSz, sampleUStart, sampleUEnd, sampleVStart, sampleVEnd, curDinnerbone);
                         }
                     }
                 }
 
-                pushTexRect(curX, renderY, glyphW - 1.0f, heightSouth, itOff, curColor, uStart, vStart, uSz, vSz, sampleUStart, sampleUEnd, sampleVStart, sampleVEnd, curDinnerbone);
+                pushTexRect(drawX, renderY, drawWidth, drawHeight, itOff, curColor, uStart, vStart, uSz, vSz, sampleUStart, sampleUEnd, sampleVStart, sampleVEnd, curDinnerbone);
 
                 if (curBold) {
                     for (int n = 1; n <= boldCopies; n++) {
                         final float shadowOffsetPart = shadowOffset * ((float) n / boldCopies);
-                        pushTexRect(curX + shadowOffsetPart, renderY, glyphW - 1.0f, heightSouth, itOff, curColor, uStart, vStart, uSz, vSz, sampleUStart, sampleUEnd, sampleVStart, sampleVEnd, curDinnerbone);
+                        pushTexRect(drawX + shadowOffsetPart, renderY, drawWidth, drawHeight, itOff, curColor, uStart, vStart, uSz, vSz, sampleUStart, sampleUEnd, sampleVStart, sampleVEnd, curDinnerbone);
                     }
                 }
 
