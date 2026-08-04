@@ -18,6 +18,7 @@ class UnicodeGlyphPageTest {
     private static final float EPSILON = 0.000001F;
     private static final String REQUIRED_GLYPHS = "0123456789OreABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
         + "₀₁₂₃₄₅₆₇₈₉H₂SO₄U₂₃₈◀◁▶▷❄";
+    private static final String REQUIRED_HANGUL = "가각간한글저니맵포션힣";
 
     /** Verifies actual resource-pack pixels replace narrower stale glyph_sizes.bin bounds. */
     @Test
@@ -91,6 +92,28 @@ class UnicodeGlyphPageTest {
 
         for (int i = 0; i < REQUIRED_GLYPHS.length(); i++) {
             final char chr = REQUIRED_GLYPHS.charAt(i);
+            final int glyph = chr & 255;
+            final float firstTexelCenter = (cellLeft(glyph) + 0.5F) / PAGE_SIZE;
+            final float lastTexelCenter = (cellLeft(glyph) + CELL_SIZE - 0.5F) / PAGE_SIZE;
+            final float uEnd = page.getUStart(glyph) + page.getUSize(glyph);
+
+            assertTrue(page.isGlyphAvailable(glyph), Character.toString(chr));
+            assertTrue(page.getUStart(glyph) <= firstTexelCenter, Character.toString(chr));
+            assertTrue(uEnd >= lastTexelCenter, Character.toString(chr));
+            assertTrue(page.getSampleUStart(glyph) <= page.getUStart(glyph), Character.toString(chr));
+            assertTrue(page.getSampleUEnd(glyph) >= uEnd, Character.toString(chr));
+            assertEquals(9.0F, page.getXAdvance(glyph, packBounds(1, 6)), EPSILON, Character.toString(chr));
+        }
+    }
+
+    /** Verifies representative Hangul pages retain both horizontal edge texels and independent advance. */
+    @Test
+    void keepsRepresentativeHangulEdgesInsideUvAndSampleBounds() {
+        for (int i = 0; i < REQUIRED_HANGUL.length(); i++) {
+            final char chr = REQUIRED_HANGUL.charAt(i);
+            final BufferedImage image = newPage(PAGE_SIZE);
+            fillGlyph(image, chr, 0, CELL_SIZE, 0, CELL_SIZE, 0xFFFFFFFF);
+            final UnicodeGlyphPage page = UnicodeGlyphPage.compose(Collections.singletonList(image));
             final int glyph = chr & 255;
             final float firstTexelCenter = (cellLeft(glyph) + 0.5F) / PAGE_SIZE;
             final float lastTexelCenter = (cellLeft(glyph) + CELL_SIZE - 0.5F) / PAGE_SIZE;

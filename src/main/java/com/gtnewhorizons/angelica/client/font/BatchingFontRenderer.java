@@ -329,12 +329,31 @@ public class BatchingFontRenderer {
     private int fontAAStrengthLast = -1;
 
     private void flushBatch() {
+        final int unicodeCommands = countUnicodeCommands();
+        if (unicodeCommands > 0 && !UnicodeTextureLifecycle.tryBeginTextureUse()) {
+            clearBatch();
+            FontProviderUnicode.get().logDiscardedBatch(unicodeCommands);
+            return;
+        }
+
         final boolean locked = GLStateManager.acquireDrawLock();
         try {
             flushBatchInner();
         } finally {
             if (locked) GLStateManager.releaseDrawLock();
+            if (unicodeCommands > 0) UnicodeTextureLifecycle.endTextureUse();
         }
+    }
+
+    /** Counts Unicode commands so their validation, bind, and draw share one reload-safe lifecycle section. */
+    private int countUnicodeCommands() {
+        final FontDrawCmd[] commands = batchCommands.elements();
+        final int commandCount = batchCommands.size();
+        int unicodeCommands = 0;
+        for (int i = 0; i < commandCount; i++) {
+            if (commands[i].isUnicode) unicodeCommands++;
+        }
+        return unicodeCommands;
     }
 
     private void flushBatchInner() {
@@ -415,9 +434,15 @@ public class BatchingFontRenderer {
         int discardedUnicodeCommands = 0;
         for (int i = 0; i < cmdsSize; i++) {
             final FontDrawCmd cmd = cmdsData[i];
-            if (cmd.isUnicode && !FontProviderUnicode.get().prepareTextureForBind(cmd.texture)) {
-                discardedUnicodeCommands++;
-                continue;
+            final int unicodeTextureId;
+            if (cmd.isUnicode) {
+                unicodeTextureId = FontProviderUnicode.get().prepareTextureForBind(cmd.texture);
+                if (unicodeTextureId == -1) {
+                    discardedUnicodeCommands++;
+                    continue;
+                }
+            } else {
+                unicodeTextureId = -1;
             }
             if (!Objects.equals(lastTexture, cmd.texture)) {
                 if (lastTexture == null) {
@@ -426,7 +451,11 @@ public class BatchingFontRenderer {
                     GLStateManager.glDisable(GL11.GL_TEXTURE_2D);
                 }
                 if (cmd.texture != null) {
-                    ((FontRendererAccessor) underlying).angelica$bindTexture(cmd.texture);
+                    if (cmd.isUnicode) {
+                        GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, unicodeTextureId);
+                    } else {
+                        ((FontRendererAccessor) underlying).angelica$bindTexture(cmd.texture);
+                    }
                     textureChanged = true;
                 }
                 lastTexture = cmd.texture;
