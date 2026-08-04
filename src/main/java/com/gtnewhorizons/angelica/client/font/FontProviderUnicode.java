@@ -214,25 +214,50 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
     /** Composes all resource-pack layers for one page without touching TextureManager or OpenGL. */
     private LoadedPage loadPage(int pageIndex, int generation, IResourceManager manager) {
         final ResourceLocation sourceLocation = getUnicodePageLocation(pageIndex);
-        final List<BufferedImage> layers = new ArrayList<>();
-
         try {
-            final List<IResource> resources = manager.getAllResources(sourceLocation);
-            for (IResource resource : resources) {
-                try (InputStream inputstream = resource.getInputStream()) {
-                    final BufferedImage image = ImageIO.read(inputstream);
-                    if (image == null) {
-                        throw new IOException("Unsupported Unicode font page image: " + sourceLocation);
+            final List<BufferedImage> layers = loadPageLayers(pageIndex, manager);
+            final UnicodeGlyphPage glyphPage = UnicodeGlyphPage.compose(layers);
+            if (pageIndex == FontGlyphRanges.UNICODE_SUBSCRIPT_DIGIT_START >>> 8) {
+                try {
+                    final UnicodeGlyphPage reference = UnicodeGlyphPage.compose(
+                        loadPageLayers(FontGlyphRanges.GTNH_SUBSCRIPT_ZERO >>> 8, manager));
+                    final int aligned = glyphPage.alignSubscriptDigitsToReference(layers, reference);
+                    if (aligned > 0) {
+                        LOGGER.debug(
+                            "Unicode subscript glyph family aligned: count={}, reference=U+{}, generation={}, thread={}",
+                            aligned,
+                            Integer.toHexString(FontGlyphRanges.GTNH_SUBSCRIPT_ZERO).toUpperCase(),
+                            generation,
+                            Thread.currentThread().getName());
                     }
-                    layers.add(image);
+                } catch (IOException | IllegalArgumentException exception) {
+                    LOGGER.debug(
+                        "GTNH subscript-zero reference unavailable; preserving composed Unicode page {}",
+                        sourceLocation,
+                        exception);
                 }
             }
-
-            final UnicodeGlyphPage glyphPage = UnicodeGlyphPage.compose(layers);
             return new LoadedPage(pageIndex, generation, glyphPage, glyphPage.takeImage());
         } catch (IOException | IllegalArgumentException exception) {
             throw new RuntimeException("Failed to compose Unicode font page " + sourceLocation, exception);
         }
+    }
+
+    /** Loads every resource-pack image layer for one Unicode page in manager priority order. */
+    private List<BufferedImage> loadPageLayers(int pageIndex, IResourceManager manager) throws IOException {
+        final ResourceLocation sourceLocation = getUnicodePageLocation(pageIndex);
+        final List<BufferedImage> layers = new ArrayList<>();
+        final List<IResource> resources = manager.getAllResources(sourceLocation);
+        for (IResource resource : resources) {
+            try (InputStream inputstream = resource.getInputStream()) {
+                final BufferedImage image = ImageIO.read(inputstream);
+                if (image == null) {
+                    throw new IOException("Unsupported Unicode font page image: " + sourceLocation);
+                }
+                layers.add(image);
+            }
+        }
+        return layers;
     }
 
     /** Uploads a current CPU page from a valid render context and returns its registered dynamic location. */
