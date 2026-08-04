@@ -442,10 +442,10 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
         return null;
     }
 
-    /** Validates and, when necessary, re-registers a current Unicode texture immediately before binding it. */
-    boolean prepareTextureForBind(ResourceLocation location) {
+    /** Validates or repairs a current Unicode texture and returns its directly bindable OpenGL ID. */
+    int prepareTextureForBind(ResourceLocation location) {
         if (location == null || !hasCurrentGlContext() || !UnicodeTextureLifecycle.tryBeginTextureUse()) {
-            return false;
+            return -1;
         }
 
         final boolean locked = GLStateManager.acquireDrawLock();
@@ -455,10 +455,13 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
                 clearRetiredPages(textureManager);
                 for (LoadedPage page : this.unicodePages) {
                     if (page != null && page.generation == this.resourceGeneration && location.equals(page.texture)) {
-                        return ensurePageTextureLocked(page, textureManager) != null;
+                        if (ensurePageTextureLocked(page, textureManager) == null || page.dynamicTexture == null) {
+                            return -1;
+                        }
+                        return page.dynamicTexture.glTextureId;
                     }
                 }
-                return false;
+                return -1;
             }
         } finally {
             if (locked) GLStateManager.releaseDrawLock();

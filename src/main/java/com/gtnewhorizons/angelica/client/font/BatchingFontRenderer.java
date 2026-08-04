@@ -478,37 +478,54 @@ public class BatchingFontRenderer {
         batchMatrixValid = false;
     }
 
+    /** Flushes deferred text segments while holding Unicode texture reload protection when needed. */
     public static void flushDeferredText() {
         if (deferredSegments.isEmpty()) return;
 
-        uploadVertexData(deferredVertexPos);
-
-        final int prevProgram = GLStateManager.glGetInteger(GL20.GL_CURRENT_PROGRAM);
-        final boolean isTextureEnabledBefore = GLStateManager.glIsEnabled(GL11.GL_TEXTURE_2D);
-        final boolean isBlendEnabledBefore = GLStateManager.glIsEnabled(GL11.GL_BLEND);
-        final int boundTextureBefore = GLStateManager.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
-
-        final boolean depthTestBefore = GLStateManager.getDepthTest().isEnabled();
-        final boolean depthMaskBefore = GLStateManager.getDepthState().isEnabled();
-
-        deferredSegments.get(0).owner.setupFontDrawState();
-        GLStateManager.glDepthMask(false);
-        flushLastTexture = DUMMY_RESOURCE_LOCATION;
-        flushTextureChanged = false;
-        try (MemoryStack stack = stackPush()) {
-            final FloatBuffer mvpBuf = stack.mallocFloat(16);
-            for (int i = 0, n = deferredSegments.size(); i < n; i++) {
-                final TextSegment segment = deferredSegments.get(i);
-                mvpBuf.clear();
-                segment.mvp.get(mvpBuf);
-                GLStateManager.glUniformMatrix4(segment.owner.mvpMatrixLocation, false, mvpBuf);
-                drawCommands(segment.owner.batchCommands.elements(), segment.cmdStart, segment.cmdEnd, segment.owner);
-            }
+        int unicodeCommands = 0;
+        for (int i = 0, n = deferredSegments.size(); i < n; i++) {
+            final TextSegment segment = deferredSegments.get(i);
+            unicodeCommands += countUnicodeCommands(
+                segment.owner.batchCommands.elements(), segment.cmdStart, segment.cmdEnd);
         }
-        restoreFontDrawState(prevProgram, isTextureEnabledBefore, isBlendEnabledBefore, boundTextureBefore);
-        restoreDepth(depthTestBefore, depthMaskBefore);
+        if (unicodeCommands > 0 && !UnicodeTextureLifecycle.tryBeginTextureUse()) {
+            discardDeferredText();
+            FontProviderUnicode.get().logDiscardedBatch(unicodeCommands);
+            return;
+        }
 
-        discardDeferredText();
+        try {
+            uploadVertexData(deferredVertexPos);
+
+            final int prevProgram = GLStateManager.glGetInteger(GL20.GL_CURRENT_PROGRAM);
+            final boolean isTextureEnabledBefore = GLStateManager.glIsEnabled(GL11.GL_TEXTURE_2D);
+            final boolean isBlendEnabledBefore = GLStateManager.glIsEnabled(GL11.GL_BLEND);
+            final int boundTextureBefore = GLStateManager.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+
+            final boolean depthTestBefore = GLStateManager.getDepthTest().isEnabled();
+            final boolean depthMaskBefore = GLStateManager.getDepthState().isEnabled();
+
+            deferredSegments.get(0).owner.setupFontDrawState();
+            GLStateManager.glDepthMask(false);
+            flushLastTexture = DUMMY_RESOURCE_LOCATION;
+            flushTextureChanged = false;
+            try (MemoryStack stack = stackPush()) {
+                final FloatBuffer mvpBuf = stack.mallocFloat(16);
+                for (int i = 0, n = deferredSegments.size(); i < n; i++) {
+                    final TextSegment segment = deferredSegments.get(i);
+                    mvpBuf.clear();
+                    segment.mvp.get(mvpBuf);
+                    GLStateManager.glUniformMatrix4(segment.owner.mvpMatrixLocation, false, mvpBuf);
+                    drawCommands(segment.owner.batchCommands.elements(), segment.cmdStart, segment.cmdEnd, segment.owner);
+                }
+            }
+            restoreFontDrawState(prevProgram, isTextureEnabledBefore, isBlendEnabledBefore, boundTextureBefore);
+            restoreDepth(depthTestBefore, depthMaskBefore);
+
+            discardDeferredText();
+        } finally {
+            if (unicodeCommands > 0) UnicodeTextureLifecycle.endTextureUse();
+        }
     }
 
     public static void discardDeferredText() {
@@ -549,13 +566,36 @@ public class BatchingFontRenderer {
     private int fontAAModeLast = -1;
     private int fontAAStrengthLast = -1;
 
+    /** Flushes current commands while preserving deferred commands and coordinating Unicode texture reloads. */
     private void flushBatch() {
+        final int unicodeCommands = countUnicodeCommands();
+        if (unicodeCommands > 0 && !UnicodeTextureLifecycle.tryBeginTextureUse()) {
+            truncateBatchToWatermark();
+            FontProviderUnicode.get().logDiscardedBatch(unicodeCommands);
+            return;
+        }
+
         final boolean locked = GLStateManager.acquireDrawLock();
         try {
             flushBatchInner();
         } finally {
             if (locked) GLStateManager.releaseDrawLock();
+            if (unicodeCommands > 0) UnicodeTextureLifecycle.endTextureUse();
         }
+    }
+
+    /** Counts Unicode commands so their validation, bind, and draw share one reload-safe lifecycle section. */
+    private int countUnicodeCommands() {
+        return countUnicodeCommands(batchCommands.elements(), deferredCmdWatermark, batchCommands.size());
+    }
+
+    /** Counts Unicode commands in the specified draw-command range. */
+    private static int countUnicodeCommands(FontDrawCmd[] commands, int from, int to) {
+        int unicodeCommands = 0;
+        for (int i = from; i < to; i++) {
+            if (commands[i].isUnicode) unicodeCommands++;
+        }
+        return unicodeCommands;
     }
 
     private void flushBatchInner() {
@@ -656,13 +696,20 @@ public class BatchingFontRenderer {
     private static ResourceLocation flushLastTexture;
     private static boolean flushTextureChanged;
 
+    /** Validates texture state and draws one contiguous range of font commands. */
     private static void drawCommands(FontDrawCmd[] cmdsData, int from, int to, BatchingFontRenderer owner) {
         int discardedUnicodeCommands = 0;
         for (int i = from; i < to; i++) {
             final FontDrawCmd cmd = cmdsData[i];
-            if (cmd.isUnicode && !FontProviderUnicode.get().prepareTextureForBind(cmd.texture)) {
-                discardedUnicodeCommands++;
-                continue;
+            final int unicodeTextureId;
+            if (cmd.isUnicode) {
+                unicodeTextureId = FontProviderUnicode.get().prepareTextureForBind(cmd.texture);
+                if (unicodeTextureId == -1) {
+                    discardedUnicodeCommands++;
+                    continue;
+                }
+            } else {
+                unicodeTextureId = -1;
             }
             if (!Objects.equals(flushLastTexture, cmd.texture)) {
                 if (flushLastTexture == null) {
@@ -671,7 +718,11 @@ public class BatchingFontRenderer {
                     GLStateManager.glDisable(GL11.GL_TEXTURE_2D);
                 }
                 if (cmd.texture != null) {
-                    ((FontRendererAccessor) owner.underlying).angelica$bindTexture(cmd.texture);
+                    if (cmd.isUnicode) {
+                        GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, unicodeTextureId);
+                    } else {
+                        ((FontRendererAccessor) owner.underlying).angelica$bindTexture(cmd.texture);
+                    }
                     flushTextureChanged = true;
                 }
                 flushLastTexture = cmd.texture;

@@ -51,4 +51,33 @@ class UnicodeTextureLifecycleTest {
         assertTrue(UnicodeTextureLifecycle.tryBeginTextureUse());
         UnicodeTextureLifecycle.endTextureUse();
     }
+
+    /** Verifies a reload cannot invalidate a texture between Unicode batch validation and binding. */
+    @Test
+    void holdsTextureUseAcrossValidationAndBind() throws InterruptedException {
+        final CountDownLatch reloadAttempting = new CountDownLatch(1);
+        final CountDownLatch reloadEntered = new CountDownLatch(1);
+        assertTrue(UnicodeTextureLifecycle.tryBeginTextureUse());
+        final Thread reloadThread = new Thread(() -> {
+            reloadAttempting.countDown();
+            UnicodeTextureLifecycle.beginTextureManagerReload();
+            try {
+                reloadEntered.countDown();
+            } finally {
+                UnicodeTextureLifecycle.endTextureManagerReload();
+            }
+        }, "Unicode texture lifecycle queued reload");
+
+        reloadThread.start();
+        try {
+            assertTrue(reloadAttempting.await(5, TimeUnit.SECONDS));
+            assertFalse(reloadEntered.await(250, TimeUnit.MILLISECONDS));
+        } finally {
+            UnicodeTextureLifecycle.endTextureUse();
+        }
+
+        assertTrue(reloadEntered.await(5, TimeUnit.SECONDS));
+        reloadThread.join(5000);
+        assertFalse(reloadThread.isAlive());
+    }
 }
