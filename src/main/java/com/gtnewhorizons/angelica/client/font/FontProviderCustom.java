@@ -16,6 +16,7 @@ import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
+import java.awt.font.FontRenderContext;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
@@ -117,9 +118,41 @@ public final class FontProviderCustom implements FontProvider {
         float uStart;
         float vStart;
         float xAdvance;
-        float glyphW;
+        float drawOffsetX;
+        float drawOffsetY;
+        float drawWidth;
+        float drawHeight;
         float uSz;
         float vSz;
+    }
+
+    static final class GlyphRenderInfo {
+
+        final float uStart;
+        final float vStart;
+        final float xAdvance;
+        final float drawOffsetX;
+        final float drawOffsetY;
+        final float drawWidth;
+        final float drawHeight;
+        final float uSize;
+        final float vSize;
+        final ResourceLocation texture;
+
+        /** Captures one custom glyph's atlas UV, baseline-relative quad, and independent pen advance. */
+        private GlyphRenderInfo(float uStart, float vStart, float xAdvance, float drawOffsetX, float drawOffsetY,
+            float drawWidth, float drawHeight, float uSize, float vSize, ResourceLocation texture) {
+            this.uStart = uStart;
+            this.vStart = vStart;
+            this.xAdvance = xAdvance;
+            this.drawOffsetX = drawOffsetX;
+            this.drawOffsetY = drawOffsetY;
+            this.drawWidth = drawWidth;
+            this.drawHeight = drawHeight;
+            this.uSize = uSize;
+            this.vSize = vSize;
+            this.texture = texture;
+        }
     }
 
     private class FontAtlas {
@@ -132,83 +165,96 @@ public final class FontProviderCustom implements FontProvider {
             this.id = id;
         }
 
+        /** Rasterizes displayable glyphs into padded cells while retaining their original bearings and advances. */
         void construct(Font font) {
-            int atlasChars = 0;
-            for (int i = 0; i < ATLAS_SIZE; i++) {
-                final char ch = (char) (i + ATLAS_SIZE * this.id);
-                if (font.canDisplay(ch)) { atlasChars++; }
-            }
-            if (atlasChars == 0) { return; }
-
             BufferedImage image = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB);
             Graphics2D g2d = image.createGraphics();
-            g2d.setFont(font);
-            FontMetrics fm = g2d.getFontMetrics();
+            configureGraphics(g2d, font);
+            final FontMetrics fm = g2d.getFontMetrics();
+            final FontRenderContext fontRenderContext = g2d.getFontRenderContext();
+            final int lineHeight = fm.getHeight();
+            final int atlasPadding = Math.max(1, (int) Math.ceil(currentFontQuality / 16.0F));
+            final int atlasGap = Math.max(atlasPadding, (int) Math.ceil(currentFontQuality / 3.0F));
+            final CustomGlyphMetrics[] rasterMetrics = new CustomGlyphMetrics[ATLAS_SIZE];
+            int atlasChars = 0;
+            int maxCellHeight = 1;
+            for (int i = 0; i < ATLAS_SIZE; i++) {
+                final char ch = (char) (i + ATLAS_SIZE * this.id);
+                if (!font.canDisplay(ch)) {
+                    continue;
+                }
+                final CustomGlyphMetrics metrics = CustomGlyphMetrics.create(
+                    font,
+                    fontRenderContext,
+                    ch,
+                    fm.getAscent(),
+                    fm.getDescent(),
+                    lineHeight,
+                    atlasPadding);
+                rasterMetrics[i] = metrics;
+                maxCellHeight = Math.max(maxCellHeight, metrics.getAtlasHeight());
+                atlasChars++;
+            }
             g2d.dispose();
+            if (atlasChars == 0) { return; }
 
             final int atlasTilesX = (int) Math.ceil(Math.sqrt(atlasChars) * 1.5f);
             final int atlasTilesY = (int) Math.ceil((double) atlasChars / atlasTilesX);
-            final float charSeparator = currentFontQuality / 3f;
-            int rowWidth = 0;
-            int maxRowWidth = 0;
-            atlasChars = 0;
-
+            int rowWidth = atlasGap;
+            int maxRowWidth = atlasGap;
+            int charsInRow = 0;
             for (int i = 0; i < ATLAS_SIZE; i++) {
-                if (atlasChars % atlasTilesX == 0) {
+                final CustomGlyphMetrics metrics = rasterMetrics[i];
+                if (metrics == null) {
+                    continue;
+                }
+                if (charsInRow >= atlasTilesX) {
                     maxRowWidth = Math.max(maxRowWidth, rowWidth);
-                    rowWidth = 0;
+                    rowWidth = atlasGap;
+                    charsInRow = 0;
                 }
-                final char ch = (char)(i + ATLAS_SIZE * this.id);
-                if (font.canDisplay(ch)) {
-                    rowWidth += (int) (charSeparator + fm.charWidth(ch));
-                    atlasChars++;
-                }
+                rowWidth += metrics.getAtlasWidth() + atlasGap;
+                charsInRow++;
             }
             maxRowWidth = Math.max(maxRowWidth, rowWidth);
 
-            final int lineHeight = fm.getHeight();
-            final float desc = fm.getDescent();
-
-            final int imageWidth = (int) (maxRowWidth + charSeparator);
-            final int imageHeight = (int) ((charSeparator + lineHeight) * atlasTilesY + charSeparator);
+            final int imageWidth = maxRowWidth;
+            final int imageHeight = atlasGap + atlasTilesY * (maxCellHeight + atlasGap);
 
             image = new BufferedImage(imageWidth, imageHeight, BufferedImage.TYPE_INT_ARGB);
             g2d = image.createGraphics();
-            g2d.setRenderingHint(RenderingHints.KEY_ALPHA_INTERPOLATION, RenderingHints.VALUE_ALPHA_INTERPOLATION_QUALITY);
-            g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            g2d.setRenderingHint(RenderingHints.KEY_COLOR_RENDERING, RenderingHints.VALUE_COLOR_RENDER_QUALITY);
-            g2d.setRenderingHint(RenderingHints.KEY_DITHERING, RenderingHints.VALUE_DITHER_DISABLE);
-            g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-            g2d.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
-            g2d.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-            g2d.setFont(font);
-            fm = g2d.getFontMetrics();
+            configureGraphics(g2d, font);
 
-            int tileX = 0, tileY = 0; // position in atlas tiles
-            int imgX = (int) charSeparator; // position in pixels
+            int tileX = 0;
+            int imgX = atlasGap;
+            int imgY = atlasGap;
 
             for (int i = 0; i < ATLAS_SIZE; i++) {
-                final char ch = (char) (i + ATLAS_SIZE * this.id);
-                if (!font.canDisplay(ch)) { continue; }
+                final CustomGlyphMetrics metrics = rasterMetrics[i];
+                if (metrics == null) { continue; }
 
                 if (tileX >= atlasTilesX) {
                     tileX = 0;
-                    imgX = (int) charSeparator;
-                    tileY++;
+                    imgX = atlasGap;
+                    imgY += maxCellHeight + atlasGap;
                 }
 
-                final int charWidth = fm.charWidth(ch);
-                final float charAspectRatio = (float) charWidth / lineHeight;
-                final float inset = currentFontQuality / 16;
-                g2d.drawString(Character.toString(ch), imgX, (lineHeight + charSeparator) * (tileY + 1) - desc);
-                final float uStart = (float) (imgX - inset * charAspectRatio) / imageWidth;
-                final float vStart = ((lineHeight + charSeparator) * (tileY + 1) - lineHeight - inset) / imageHeight;
-                final float xAdvance = charAspectRatio * 8 * charWidth / (charWidth + 2 * inset * charAspectRatio);
-                final float glyphW = charAspectRatio * 8 + 1;
-                final float uSz = (float) (charWidth + 2 * inset * charAspectRatio) / imageWidth;
-                final float vSz = (float) (lineHeight + 2 * inset) / imageHeight;
-                this.glyphData[i] = new GlyphData(uStart, vStart, xAdvance, glyphW, uSz, vSz);
-                imgX += (int) (charWidth + charSeparator);
+                final int atlasWidth = metrics.getAtlasWidth();
+                final int atlasHeight = metrics.getAtlasHeight();
+                final float baselineX = imgX + metrics.atlasPadding - metrics.bitmapBounds.x;
+                final float baselineY = imgY + metrics.atlasPadding - metrics.bitmapBounds.y;
+                g2d.drawGlyphVector(metrics.glyphVector, baselineX, baselineY);
+                this.glyphData[i] = new GlyphData(
+                    (float) imgX / imageWidth,
+                    (float) imgY / imageHeight,
+                    metrics.advanceX,
+                    metrics.drawOffsetX,
+                    metrics.drawOffsetY,
+                    metrics.drawWidth,
+                    metrics.drawHeight,
+                    (float) atlasWidth / imageWidth,
+                    (float) atlasHeight / imageHeight);
+                imgX += atlasWidth + atlasGap;
                 tileX++;
             }
             g2d.dispose();
@@ -222,6 +268,18 @@ public final class FontProviderCustom implements FontProvider {
         }
     }
 
+    /** Applies identical Java2D rasterization hints during metric extraction and final atlas drawing. */
+    private static void configureGraphics(Graphics2D graphics, Font font) {
+        graphics.setRenderingHint(RenderingHints.KEY_ALPHA_INTERPOLATION, RenderingHints.VALUE_ALPHA_INTERPOLATION_QUALITY);
+        graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        graphics.setRenderingHint(RenderingHints.KEY_COLOR_RENDERING, RenderingHints.VALUE_COLOR_RENDER_QUALITY);
+        graphics.setRenderingHint(RenderingHints.KEY_DITHERING, RenderingHints.VALUE_DITHER_DISABLE);
+        graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+        graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+        graphics.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+        graphics.setFont(font);
+    }
+
     private FontAtlas getAtlas(char chr) {
         int id = chr / ATLAS_SIZE;
         FontAtlas fa = this.fontAtlases[id];
@@ -233,10 +291,37 @@ public final class FontProviderCustom implements FontProvider {
         return fa;
     }
 
+    /** Returns a custom glyph's cached atlas data, or null when this provider cannot display it. */
+    private GlyphData getGlyphData(char chr) {
+        if (this.font == null) {
+            return null;
+        }
+        return getAtlas(chr).glyphData[chr % ATLAS_SIZE];
+    }
+
+    /** Returns one immutable custom glyph snapshot with the current custom-font scale applied once. */
+    GlyphRenderInfo getRenderInfo(char chr) {
+        final GlyphData data = getGlyphData(chr);
+        if (data == null) {
+            return null;
+        }
+        final float scale = FontConfig.customFontScale;
+        return new GlyphRenderInfo(
+            data.uStart,
+            data.vStart,
+            data.xAdvance * scale,
+            data.drawOffsetX * scale,
+            data.drawOffsetY * scale,
+            data.drawWidth * scale,
+            data.drawHeight * scale,
+            data.uSz,
+            data.vSz,
+            getAtlas(chr).texture);
+    }
+
     @Override
     public boolean isGlyphAvailable(char chr) {
-        if (this.font == null) { return false; }
-        return (getAtlas(chr).glyphData[chr % ATLAS_SIZE] != null);
+        return getGlyphData(chr) != null;
     }
 
     @Override
@@ -261,7 +346,7 @@ public final class FontProviderCustom implements FontProvider {
 
     @Override
     public float getGlyphW(char chr) {
-        return getAtlas(chr).glyphData[chr % ATLAS_SIZE].glyphW * FontConfig.customFontScale;
+        return getAtlas(chr).glyphData[chr % ATLAS_SIZE].drawWidth * FontConfig.customFontScale + 1.0F;
     }
 
     @Override
