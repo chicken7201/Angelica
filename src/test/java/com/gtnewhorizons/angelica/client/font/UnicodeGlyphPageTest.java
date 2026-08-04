@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.awt.image.BufferedImage;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
@@ -138,6 +139,46 @@ class UnicodeGlyphPageTest {
         assertEquals(3.49F, page.getDeclaredGlyphWidth(packedBounds), EPSILON);
         assertTrue(page.getDeclaredUStart(glyph, packedBounds) + page.getDeclaredUSize(packedBounds)
             < (cellLeft(glyph) + 14.0F) / PAGE_SIZE);
+    }
+
+    /** Verifies resource-pack subscripts adopt the GTNH zero box without cropping either horizontal source edge. */
+    @Test
+    void alignsSubscriptFamilyToCustomZeroBounds() {
+        final BufferedImage lower = newPage(PAGE_SIZE);
+        final BufferedImage higher = newPage(PAGE_SIZE);
+        final BufferedImage referenceImage = newPage(PAGE_SIZE);
+        for (char chr = FontGlyphRanges.UNICODE_SUBSCRIPT_DIGIT_START;
+            chr <= FontGlyphRanges.UNICODE_SUBSCRIPT_DIGIT_END; chr++) {
+            final int lowerRight = chr == '₁' ? 5 : 7;
+            final int higherRight = chr == '₁' ? 6 : 8;
+            fillGlyph(lower, chr, 2, lowerRight, 9, 16, 0xFFFFFFFF);
+            fillGlyph(higher, chr, 0, higherRight, 6, 16, 0x80FFFFFF);
+        }
+        fillGlyph(lower, 'A', 1, 8, 2, 14, 0xFFFFFFFF);
+        fillGlyph(higher, 'A', 1, 10, 2, 14, 0xFFFFFFFF);
+        fillGlyph(referenceImage, FontGlyphRanges.GTNH_SUBSCRIPT_ZERO, 2, 7, 9, 16, 0xFFFFFFFF);
+
+        final List<BufferedImage> layers = Arrays.asList(lower, higher);
+        final UnicodeGlyphPage page = UnicodeGlyphPage.compose(layers);
+        final UnicodeGlyphPage reference = UnicodeGlyphPage.compose(Collections.singletonList(referenceImage));
+        assertEquals(10, page.alignSubscriptDigitsToReference(layers, reference));
+        assertEquals(0, page.alignSubscriptDigitsToReference(layers, reference));
+
+        assertEquals(3, page.getBitmapWidth('₁' & 255));
+        assertEquals(5, page.getBitmapWidth('₂' & 255));
+        assertEquals(9, page.getBitmapTop('₁' & 255));
+        assertEquals(16, page.getBitmapBottom('₁' & 255));
+        assertEquals(9, page.getBitmapTop('₂' & 255));
+        assertEquals(16, page.getBitmapBottom('₂' & 255));
+        assertEquals(9, page.getBitmapWidth('A' & 255));
+        assertEquals(2.5F, page.getXAdvance('₁' & 255, packBounds(2, 4)), EPSILON);
+        assertEquals(3.5F, page.getXAdvance('₂' & 255, packBounds(2, 6)), EPSILON);
+
+        final BufferedImage normalized = page.takeImage();
+        assertTrue((normalized.getRGB(cellLeft('₁' & 255) + 2, cellTop('₁' & 255) + 9) >>> 24) != 0);
+        assertTrue((normalized.getRGB(cellLeft('₁' & 255) + 4, cellTop('₁' & 255) + 9) >>> 24) != 0);
+        assertTrue((normalized.getRGB(cellLeft('₂' & 255) + 2, cellTop('₂' & 255) + 9) >>> 24) != 0);
+        assertTrue((normalized.getRGB(cellLeft('₂' & 255) + 6, cellTop('₂' & 255) + 9) >>> 24) != 0);
     }
 
     /** Verifies an atlas cell with no visible pixels is rejected as a missing glyph. */
