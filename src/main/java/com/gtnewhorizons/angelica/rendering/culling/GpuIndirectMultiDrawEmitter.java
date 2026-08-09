@@ -14,7 +14,6 @@ import org.embeddedt.embeddium.impl.gl.device.DrawCommandList;
 import org.embeddedt.embeddium.impl.gl.tessellation.GlPrimitiveType;
 import org.embeddedt.embeddium.impl.gl.tessellation.GlTessellation;
 import org.embeddedt.embeddium.impl.render.chunk.multidraw.DrawCommandSink;
-import org.embeddedt.embeddium.impl.render.chunk.multidraw.IndirectMultiDrawEmitter;
 import org.embeddedt.embeddium.impl.render.chunk.multidraw.MultiDrawEmitter;
 import org.embeddedt.embeddium.impl.render.chunk.region.RenderRegion;
 import org.lwjgl.opengl.GL11;
@@ -83,7 +82,7 @@ public final class GpuIndirectMultiDrawEmitter implements MultiDrawEmitter {
 
     @Setter private ByteBuffer frustumUboBytes;
 
-    private IndirectMultiDrawEmitter cpuFallback;
+    private BufferedIndirectMultiDrawEmitter cpuFallback;
 
     public static long sectionMetaBytes;
 
@@ -123,8 +122,8 @@ public final class GpuIndirectMultiDrawEmitter implements MultiDrawEmitter {
         }
     }
 
-    private IndirectMultiDrawEmitter cpuFallback() {
-        if (cpuFallback == null) cpuFallback = new IndirectMultiDrawEmitter();
+    private BufferedIndirectMultiDrawEmitter cpuFallback() {
+        if (cpuFallback == null) cpuFallback = new BufferedIndirectMultiDrawEmitter();
         return cpuFallback;
     }
 
