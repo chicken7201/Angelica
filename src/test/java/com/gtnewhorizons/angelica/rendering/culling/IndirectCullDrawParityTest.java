@@ -22,7 +22,6 @@ import org.embeddedt.embeddium.impl.gl.tessellation.GlVertexArrayTessellation;
 import org.embeddedt.embeddium.impl.gl.tessellation.TessellationBinding;
 import org.embeddedt.embeddium.impl.render.chunk.multidraw.BatchAssembler;
 import org.embeddedt.embeddium.impl.render.chunk.multidraw.DirectMultiDrawEmitter;
-import org.embeddedt.embeddium.impl.render.chunk.multidraw.IndirectMultiDrawEmitter;
 import org.embeddedt.embeddium.impl.render.chunk.multidraw.MultiDrawEmitter;
 import org.embeddedt.embeddium.impl.render.chunk.region.RenderRegion;
 import org.joml.Matrix4f;
@@ -561,7 +560,7 @@ class IndirectCullDrawParityTest {
         final RenderRegion region2 = newRegionKey();
 
         final DirectMultiDrawEmitter direct = new DirectMultiDrawEmitter();
-        final IndirectMultiDrawEmitter cpuIndirect = new IndirectMultiDrawEmitter();
+        final BufferedIndirectMultiDrawEmitter cpuIndirect = new BufferedIndirectMultiDrawEmitter();
         GlMutableBuffer vertexBuffer = null;
         GlMutableBuffer sharedIndexBuffer = null;
         GlMutableBuffer sortedIndexBuffer = null;

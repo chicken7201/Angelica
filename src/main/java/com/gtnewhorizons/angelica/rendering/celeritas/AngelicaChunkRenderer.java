@@ -3,6 +3,7 @@ package com.gtnewhorizons.angelica.rendering.celeritas;
 import com.gtnewhorizons.angelica.AngelicaMod;
 import com.gtnewhorizons.angelica.glsm.RenderSystem;
 import com.gtnewhorizons.angelica.glsm.backend.BackendManager;
+import com.gtnewhorizons.angelica.rendering.culling.BufferedIndirectMultiDrawEmitter;
 import com.gtnewhorizons.angelica.rendering.culling.GpuIndirectMultiDrawEmitter;
 import com.gtnewhorizons.angelica.glsm.profiling.Tracy;
 import com.gtnewhorizons.angelica.proxy.ClientProxy;
@@ -26,7 +27,6 @@ import org.embeddedt.embeddium.impl.render.chunk.lists.ChunkRenderList;
 import org.embeddedt.embeddium.impl.render.chunk.multidraw.DrawCommandSink;
 import org.embeddedt.embeddium.impl.render.chunk.region.RenderRegion;
 import org.embeddedt.embeddium.impl.render.chunk.multidraw.DirectMultiDrawEmitter;
-import org.embeddedt.embeddium.impl.render.chunk.multidraw.IndirectMultiDrawEmitter;
 import org.embeddedt.embeddium.impl.render.chunk.multidraw.MultiDrawEmitter;
 import org.embeddedt.embeddium.impl.render.chunk.shader.ChunkShaderBindingPoints;
 import org.embeddedt.embeddium.impl.render.chunk.shader.ChunkShaderInterface;
@@ -90,7 +90,7 @@ class AngelicaChunkRenderer extends DefaultChunkRenderer {
 
         return switch (mode) {
             case DIRECT -> new DirectMultiDrawEmitter();
-            case INDIRECT -> new IndirectMultiDrawEmitter();
+            case INDIRECT -> new BufferedIndirectMultiDrawEmitter();
             case INDIVIDUAL -> new IndividualDrawEmitter();
         };
     }
