@@ -6,7 +6,9 @@ import com.gtnewhorizons.angelica.glsm.streaming.TessellatorStreamingDrawer;
 import lombok.Getter;
 import net.minecraft.client.renderer.Tessellator;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL13;
 
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 
@@ -26,7 +28,12 @@ public class DeferredDrawBatcher {
     @Getter private static boolean active = false;
     private static DeferredBatchTessellator batchTessellator;
     private static long entryStateKey;
+    private static int nestingDepth;
+    private static boolean textureStatePushed;
+    private static boolean[] entryTexture2DEnabled;
+    private static boolean[] touchedTextureUnits;
 
+    /** Prevents construction of the static batching coordinator. */
     private DeferredDrawBatcher() {}
 
     /**
@@ -35,7 +42,11 @@ public class DeferredDrawBatcher {
      * subsequent tessellator.draw() calls are intercepted and accumulated.
      */
     public static void enter() {
-        active = true;
+        if (active) {
+            nestingDepth++;
+            return;
+        }
+
         if (batchTessellator == null) {
             batchTessellator = new DeferredBatchTessellator(memAlloc(INITIAL_BUFFER_SIZE));
         }
@@ -43,7 +54,18 @@ public class DeferredDrawBatcher {
         batchTessellator.setParentTessellator(Tessellator.instance);
         batchTessellator.snapshotDefaultModelview();
         entryStateKey = captureStateKey();
-        TessellatorManager.startCapturingDirect(batchTessellator);
+        snapshotTextureEnableState();
+        GLStateManager.glPushAttrib(GL11.GL_TEXTURE_BIT);
+        textureStatePushed = true;
+
+        try {
+            TessellatorManager.startCapturingDirect(batchTessellator);
+            active = true;
+            nestingDepth = 1;
+        } catch (RuntimeException | Error e) {
+            restoreEntryTextureState();
+            throw e;
+        }
     }
 
     /**
@@ -52,18 +74,27 @@ public class DeferredDrawBatcher {
      * state so the trailing vanilla Tessellator.draw() renders with the layer atlas.
      */
     public static void exitAndFlush() {
+        if (!active) return;
+        if (--nestingDepth > 0) return;
+
         active = false;
         final List<DeferredBatchTessellator.DrawRange> ranges = batchTessellator.getRanges();
 
-        if (!ranges.isEmpty()) {
-            ranges.sort(Comparator.comparingLong(DeferredBatchTessellator.DrawRange::stateKey));
-            flushSorted(ranges);
-            applyStateKey(entryStateKey);
+        try {
+            if (!ranges.isEmpty()) {
+                ranges.sort(Comparator.comparingLong(DeferredBatchTessellator.DrawRange::stateKey));
+                flushSorted(ranges);
+            }
+        } finally {
+            try {
+                TessellatorManager.stopCapturingDirect();
+            } finally {
+                restoreEntryState();
+            }
         }
-
-        TessellatorManager.stopCapturingDirect();
     }
 
+    /** Flushes sorted ranges one complete deferred state at a time. */
     private static void flushSorted(List<DeferredBatchTessellator.DrawRange> ranges) {
         long currentKey = ranges.get(0).stateKey();
         int groupStart = 0;
@@ -94,26 +125,46 @@ public class DeferredDrawBatcher {
             final DeferredBatchTessellator.DrawRange first = ranges.get(i);
             final int drawMode = first.drawMode();
             final int flags = first.flags();
+            final int subEnd = findMergeEnd(ranges, i, to);
 
             int totalBytes = 0;
             int totalVertices = 0;
-            int subEnd = i;
-
-            while (subEnd < to) {
-                final DeferredBatchTessellator.DrawRange e = ranges.get(subEnd);
-                if (e.drawMode() != drawMode || e.flags() != flags) break;
+            for (int j = i; j < subEnd; j++) {
+                final DeferredBatchTessellator.DrawRange e = ranges.get(j);
                 totalBytes += e.byteLength();
                 totalVertices += e.vertexCount();
-                subEnd++;
-
-                // Don't try to merge strips, fans, loops or polygons
-                if (GLStateManager.isContinuousDraw(drawMode)) break;
             }
 
             drawPackedBatch(batchTessellator, ranges, i, subEnd, totalBytes, totalVertices, drawMode, flags);
 
             i = subEnd;
         }
+    }
+
+    /** Finds the exclusive end of a merge that preserves every source draw's primitive boundary. */
+    static int findMergeEnd(List<DeferredBatchTessellator.DrawRange> ranges, int from, int to) {
+        final DeferredBatchTessellator.DrawRange first = ranges.get(from);
+        if (!hasCompleteIndependentPrimitives(first.drawMode(), first.vertexCount())) return from + 1;
+
+        int end = from + 1;
+        while (end < to) {
+            final DeferredBatchTessellator.DrawRange candidate = ranges.get(end);
+            if (candidate.drawMode() != first.drawMode() || candidate.flags() != first.flags()) break;
+            if (!hasCompleteIndependentPrimitives(candidate.drawMode(), candidate.vertexCount())) break;
+            end++;
+        }
+        return end;
+    }
+
+    /** Returns whether concatenation can preserve this draw call's complete independent primitives. */
+    private static boolean hasCompleteIndependentPrimitives(int drawMode, int vertexCount) {
+        return switch (drawMode) {
+            case GL11.GL_POINTS -> true;
+            case GL11.GL_LINES -> vertexCount % 2 == 0;
+            case GL11.GL_TRIANGLES -> vertexCount % 3 == 0;
+            case GL11.GL_QUADS -> vertexCount % 4 == 0;
+            default -> false;
+        };
     }
 
     /**
@@ -139,7 +190,8 @@ public class DeferredDrawBatcher {
 
     /**
      * Pack current GLSM state into a long key for grouping.
-     * Layout: [tex1En:1][tex0En:1][textureId:20][srcRgb:12][dstRgb:12][blendEnabled:1][depthMask:1] = 48 bits
+     * Layout: [activeTexEn:1][activeUnit:8][tex1En:1][tex0En:1][textureId:20]
+     * [srcRgb:12][dstRgb:12][blendEnabled:1][depthMask:1] = 57 bits
      * GL blend constants (e.g. GL_SRC_ALPHA=0x0302) need 12 bits.
      *
      * NOT captured (uniform within a particle layer bracket — set once before startDrawingQuads,
@@ -158,29 +210,46 @@ public class DeferredDrawBatcher {
         final boolean depthMask = GLStateManager.getDepthState().isEnabled();
         final boolean tex0Enabled = GLStateManager.getTextures().getTextureUnitStates(0).isEnabled();
         final boolean tex1Enabled = GLStateManager.getTextures().getTextureUnitStates(1).isEnabled();
+        final boolean activeTexEnabled = GLStateManager.getTextures().getTextureUnitStates(activeUnit).isEnabled();
 
-        return packStateKey(textureId, srcRgb, dstRgb, blendEnabled, depthMask, tex0Enabled, tex1Enabled);
+        return packStateKey(activeUnit, textureId, srcRgb, dstRgb, blendEnabled, depthMask, tex0Enabled, tex1Enabled, activeTexEnabled);
     }
 
-    static long packStateKey(int textureId, int srcRgb, int dstRgb, boolean blendEnabled, boolean depthMask, boolean tex0Enabled, boolean tex1Enabled) {
+    /** Packs the captured texture selector, binding, and fixed-function draw state. */
+    static long packStateKey(int activeUnit, int textureId, int srcRgb, int dstRgb, boolean blendEnabled, boolean depthMask, boolean tex0Enabled, boolean tex1Enabled, boolean activeTexEnabled) {
         return ((long) (textureId & 0xFFFFF) << 26)
             | ((long) (srcRgb & 0xFFF) << 14)
             | ((long) (dstRgb & 0xFFF) << 2)
             | (blendEnabled ? 2L : 0L)
             | (depthMask ? 1L : 0L)
             | (tex0Enabled ? (1L << 46) : 0L)
-            | (tex1Enabled ? (1L << 47) : 0L);
+            | (tex1Enabled ? (1L << 47) : 0L)
+            | ((long) (activeUnit & 0xFF) << 48)
+            | (activeTexEnabled ? (1L << 56) : 0L);
     }
 
+    /** Extracts the captured active texture unit. */
+    static int unpackTextureUnit(long key) { return (int) ((key >> 48) & 0xFF); }
+    /** Extracts the captured texture binding. */
     static int unpackTextureId(long key) { return (int) ((key >> 26) & 0xFFFFF); }
+    /** Extracts the captured source RGB blend factor. */
     static int unpackSrcRgb(long key) { return (int) ((key >> 14) & 0xFFF); }
+    /** Extracts the captured destination RGB blend factor. */
     static int unpackDstRgb(long key) { return (int) ((key >> 2) & 0xFFF); }
+    /** Extracts whether blending was enabled. */
     static boolean unpackBlendEnabled(long key) { return (key & 2L) != 0; }
+    /** Extracts the captured depth write mask. */
     static boolean unpackDepthMask(long key) { return (key & 1L) != 0; }
+    /** Extracts the texture-2D enable for unit zero. */
     static boolean unpackTex0Enabled(long key) { return (key & (1L << 46)) != 0; }
+    /** Extracts the texture-2D enable for unit one. */
     static boolean unpackTex1Enabled(long key) { return (key & (1L << 47)) != 0; }
+    /** Extracts the texture-2D enable for the captured active unit. */
+    static boolean unpackActiveTexEnabled(long key) { return (key & (1L << 56)) != 0; }
 
+    /** Applies one deferred state after selecting the texture unit captured with its binding. */
     static void applyStateKey(long key) {
+        final int textureUnit = unpackTextureUnit(key);
         final int textureId = unpackTextureId(key);
         final int srcRgb = unpackSrcRgb(key);
         final int dstRgb = unpackDstRgb(key);
@@ -188,9 +257,15 @@ public class DeferredDrawBatcher {
         final boolean depthMask = unpackDepthMask(key);
         final boolean tex0Enabled = unpackTex0Enabled(key);
         final boolean tex1Enabled = unpackTex1Enabled(key);
+        final boolean activeTexEnabled = unpackActiveTexEnabled(key);
 
+        markTextureUnitTouched(0);
+        markTextureUnitTouched(1);
+        markTextureUnitTouched(textureUnit);
         GLStateManager.getTextures().getTextureUnitStates(0).setEnabled(tex0Enabled);
         GLStateManager.getTextures().getTextureUnitStates(1).setEnabled(tex1Enabled);
+        GLStateManager.glActiveTexture(GL13.GL_TEXTURE0 + textureUnit);
+        GLStateManager.getTextures().getTextureUnitStates(textureUnit).setEnabled(activeTexEnabled);
         GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, textureId);
         GLStateManager.glBlendFunc(srcRgb, dstRgb);
         if (blendEnabled) {
@@ -199,5 +274,57 @@ public class DeferredDrawBatcher {
             GLStateManager.disableBlend();
         }
         GLStateManager.glDepthMask(depthMask);
+    }
+
+    /** Snapshots texture-2D enables without broadening restoration to unrelated GL_ENABLE_BIT state. */
+    private static void snapshotTextureEnableState() {
+        final int unitCount = GLStateManager.MAX_TEXTURE_UNITS;
+        if (entryTexture2DEnabled == null || entryTexture2DEnabled.length != unitCount) {
+            entryTexture2DEnabled = new boolean[unitCount];
+            touchedTextureUnits = new boolean[unitCount];
+        }
+        Arrays.fill(touchedTextureUnits, false);
+        for (int unit = 0; unit < unitCount; unit++) {
+            entryTexture2DEnabled[unit] = GLStateManager.getTextures().getTextureUnitStates(unit).isEnabled();
+        }
+    }
+
+    /** Records a texture unit whose enable state the batcher applies. */
+    private static void markTextureUnitTouched(int unit) {
+        if (textureStatePushed && unit >= 0 && unit < touchedTextureUnits.length) {
+            touchedTextureUnits[unit] = true;
+        }
+    }
+
+    /** Restores blend/depth state plus all texture state owned by the deferred bracket. */
+    private static void restoreEntryState() {
+        try {
+            applyStateKey(entryStateKey);
+        } finally {
+            try {
+                restoreEntryTextureState();
+            } finally {
+                nestingDepth = 0;
+            }
+        }
+    }
+
+    /** Restores texture bindings, selector, and only the texture enables touched by batching. */
+    private static void restoreEntryTextureState() {
+        try {
+            if (textureStatePushed) {
+                textureStatePushed = false;
+                GLStateManager.glPopAttrib();
+            }
+        } finally {
+            if (touchedTextureUnits != null) {
+                for (int unit = 0; unit < touchedTextureUnits.length; unit++) {
+                    if (touchedTextureUnits[unit]) {
+                        GLStateManager.getTextures().getTextureUnitStates(unit).setEnabled(entryTexture2DEnabled[unit]);
+                    }
+                }
+                Arrays.fill(touchedTextureUnits, false);
+            }
+        }
     }
 }
