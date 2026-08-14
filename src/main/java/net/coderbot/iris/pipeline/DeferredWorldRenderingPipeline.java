@@ -237,8 +237,11 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 
 		final int entryTextureUnit = GLStateManager.getActiveTextureUnit();
 		GLStateManager.glActiveTexture(GL13.GL_TEXTURE2);
-		customTextureManager = new CustomTextureManager(programs.getPackDirectives(), programs.getPack().getCustomTextureDataMap(), programs.getPack().getIrisCustomTextureDataMap(), programs.getPack().getCustomNoiseTexture());
-		GLStateManager.glActiveTexture(GL13.GL_TEXTURE0 + entryTextureUnit);
+		try {
+			customTextureManager = new CustomTextureManager(programs.getPackDirectives(), programs.getPack().getCustomTextureDataMap(), programs.getPack().getIrisCustomTextureDataMap(), programs.getPack().getCustomNoiseTexture());
+		} finally {
+			GLStateManager.glActiveTexture(GL13.GL_TEXTURE0 + entryTextureUnit);
+		}
 
 		final Map<Integer, CompletableFuture<Map<PatchShaderType, String>>> prepareTransformFutures =
 			submitCompositeTransforms(programs.getPrepare(), TextureStage.PREPARE, programs.getPackDirectives().getTextureMap());
