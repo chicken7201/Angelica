@@ -4,11 +4,13 @@ import com.gtnewhorizon.gtnhlib.blockpos.BlockPos;
 import com.gtnewhorizons.angelica.glsm.profiling.Tracy;
 import com.gtnewhorizons.angelica.rendering.AngelicaRenderQueue;
 import com.gtnewhorizons.angelica.rendering.StateAwareTessellator;
+import com.gtnewhorizons.angelica.mixins.interfaces.OverridesGetDistanceFrom;
 import com.gtnewhorizons.angelica.rendering.TileEntityRenderBoundsRegistry;
 import com.gtnewhorizons.angelica.rendering.celeritas.api.IrisShaderProvider;
 import com.gtnewhorizons.angelica.rendering.celeritas.api.IrisShaderProviderHolder;
 import com.gtnewhorizons.angelica.rendering.celeritas.iris.BlockRenderContext;
 import com.gtnewhorizons.angelica.rendering.celeritas.iris.ContextAwareChunkVertexEncoder;
+import com.gtnewhorizons.angelica.rendering.celeritas.world.WorldSlice;
 import com.prupe.mcpatcher.mal.block.RenderBlocksUtils;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.objects.Reference2ReferenceMap;
@@ -111,6 +113,8 @@ public abstract class AngelicaChunkBuilderMeshingTask extends ChunkBuilderTask<C
 
         final BlockPos blockPos = new BlockPos(minX, minY, minZ);
         final IBlockAccess region = getBlockAccess();
+        final WorldSlice reportingSlice = region instanceof WorldSlice slice ? slice : null;
+        if (reportingSlice != null) reportingSlice.setRenderingBlock(null);
         final SmoothBiomeColorCache biomeColorCache = getBiomeColorCache();
 
         onEnterExecute();
@@ -155,6 +159,8 @@ public abstract class AngelicaChunkBuilderMeshingTask extends ChunkBuilderTask<C
                             continue;
                         }
 
+                        if (reportingSlice != null) reportingSlice.setRenderingBlock(block);
+
                         final int meta = region.getBlockMetadata(x, y, z);
 
                         if (block.hasTileEntity(meta)) {
@@ -185,7 +191,7 @@ public abstract class AngelicaChunkBuilderMeshingTask extends ChunkBuilderTask<C
                                     renderData.culledBlockEntities.add(tileEntity);
                                     AngelicaBuiltRenderSectionData.packSectionLocalBounds(culledBounds, aabb, minX, minY, minZ);
                                     double teDistSq;
-                                    if (TileEntityRenderBoundsRegistry.overridesGetDistanceFrom(tileEntity.getClass())) {
+                                    if (tileEntity instanceof OverridesGetDistanceFrom) {
                                         teDistSq = Double.POSITIVE_INFINITY;
                                     } else {
                                         try {

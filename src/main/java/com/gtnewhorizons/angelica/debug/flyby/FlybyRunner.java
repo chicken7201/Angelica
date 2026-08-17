@@ -2,6 +2,7 @@ package com.gtnewhorizons.angelica.debug.flyby;
 
 import com.gtnewhorizons.angelica.config.SystemProperties;
 import com.gtnewhorizons.angelica.glsm.profiling.Tracy;
+import com.gtnewhorizons.angelica.rendering.FramePacer;
 import cpw.mods.fml.common.eventhandler.SubscribeEvent;
 import cpw.mods.fml.common.gameevent.TickEvent;
 import net.minecraft.client.Minecraft;
@@ -56,6 +57,10 @@ public final class FlybyRunner {
     private long plotLeg;
     private long plotTurning;
     private int lastPhase = -1;
+
+    private long warmupSection;
+    private long runSection;
+    private long legSection;
 
     private long[] frameTimesNs = NO_FRAMES;
     private int frameCount;
@@ -180,9 +185,13 @@ public final class FlybyRunner {
         this.buildPath();
         this.freezeTimeAndWeather(mc);
 
-        this.state = this.warmupTicks > 0 ? State.WARMUP : State.RUNNING;
         this.tick = 0;
-        if (this.state == State.RUNNING) this.beginMeasuring();
+        if (this.warmupTicks > 0) {
+            this.state = State.WARMUP;
+            this.warmupSection = Tracy.sectionEnter(Tracy.SECTION_BENCHMARK, "flyby warmup");
+        } else {
+            this.beginMeasuring();
+        }
 
         LOGGER.info("Flyby {} starting at {} {} {} yaw {}", this.route.id(),
             this.originX, this.originY, this.originZ, this.originYaw);
@@ -252,12 +261,18 @@ public final class FlybyRunner {
         final int phase = (leg << 1) | turning;
         if (phase != this.lastPhase) {
             this.lastPhase = phase;
-            Tracy.message("flyby " + (turning != 0 ? "turn" : "leg") + " " + leg);
+            final String label = "flyby " + (turning != 0 ? "turn" : "leg") + " " + leg;
+            Tracy.message(label);
+            Tracy.sectionLeave(this.legSection);
+            this.legSection = Tracy.sectionEnter(Tracy.SECTION_BENCHMARK, label);
         }
     }
 
     private void beginMeasuring() {
         this.state = State.RUNNING;
+        Tracy.sectionLeave(this.warmupSection);
+        this.warmupSection = 0L;
+        if (Tracy.ENABLED) this.runSection = Tracy.sectionEnter(Tracy.SECTION_BENCHMARK, "flyby " + this.route.id());
         this.plotLeg = Tracy.plotHandle("flyby.leg");
         this.plotTurning = Tracy.plotHandle("flyby.turning");
         this.lastPhase = -1;
@@ -265,11 +280,10 @@ public final class FlybyRunner {
         this.frameCount = 0;
         this.lastFrameNs = 0L;
         this.runStartNs = System.nanoTime();
-        Tracy.message("flyby start route=" + this.route.id()
-            + " length=" + this.runLength + this.route.lengthUnit()
-            + " speed=" + this.route.speedOr(this.speed) + "b/t"
-            + " ticks=" + this.runTicks
-            + " sdlgpu=" + SystemProperties.USE_SDL_GPU);
+        FramePacer.beginStats();
+        if (Tracy.ENABLED) {
+            Tracy.message("flyby start route=" + this.route.id() + " length=" + this.runLength + this.route.lengthUnit() + " speed=" + this.route.speedOr(this.speed) + "b/t ticks=" + this.runTicks + " sdlgpu=" + SystemProperties.USE_SDL_GPU);
+        }
     }
 
     private void holdPosition(EntityClientPlayerMP player) {
@@ -364,10 +378,15 @@ public final class FlybyRunner {
         this.state = State.SETTLE;
         this.tick = 0;
         final long elapsedNs = System.nanoTime() - this.runStartNs;
-        Tracy.message("flyby end route=" + this.route.id() + " frames=" + this.frameCount);
+        Tracy.sectionLeave(this.legSection);
+        this.legSection = 0L;
+        Tracy.sectionLeave(this.runSection);
+        this.runSection = 0L;
+        if (Tracy.ENABLED) Tracy.message("flyby end route=" + this.route.id() + " frames=" + this.frameCount);
 
         final String summary = this.summarise(elapsedNs, player);
         LOGGER.info(summary);
+        LOGGER.info(FramePacer.endStats());
         if (mc.thePlayer != null) {
             mc.thePlayer.addChatMessage(new ChatComponentText(EnumChatFormatting.AQUA + "[Angelica] " + EnumChatFormatting.WHITE + summary));
         }
@@ -422,6 +441,13 @@ public final class FlybyRunner {
         if (this.isActive()) {
             LOGGER.info("Flyby cancelled");
             this.state = State.DONE;
+            Tracy.sectionLeave(this.warmupSection);
+            this.warmupSection = 0L;
+            Tracy.sectionLeave(this.legSection);
+            this.legSection = 0L;
+            Tracy.sectionLeave(this.runSection);
+            this.runSection = 0L;
+            FramePacer.endStats();
         }
     }
 

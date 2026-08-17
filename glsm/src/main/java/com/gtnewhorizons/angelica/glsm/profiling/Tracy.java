@@ -44,6 +44,18 @@ public final class Tracy {
     public static final int COLOR_IRIS = 0x9E862E; // gold
     public static final int COLOR_FFP = 0x7A4E9E; // purple
 
+    public static final int SECTION_WORLD = 1;
+    public static final int SECTION_SHADERS = 2;
+    public static final int SECTION_BENCHMARK = 3;
+    public static final int SECTION_UI = 4;
+
+    private static final SectionRegistry SECTIONS = new SectionRegistry(new SectionRegistry.Emitter() {
+        @Override public long enter(int category, String text) { return BACKEND.sectionEnter(category, text); }
+        @Override public void leave(long nativeId) { BACKEND.sectionLeave(nativeId); }
+        @Override public void setup(int category, String name) { BACKEND.sectionSetup(category, name); }
+        @Override public boolean isConnected() { return BACKEND.isConnected(); }
+    });
+
     private static final ThreadLocal<ZoneStack> STACK = new ThreadLocal<>() {
         @Override
         protected ZoneStack initialValue() {
@@ -62,6 +74,10 @@ public final class Tracy {
         FINE_ZONES = ENABLED && SystemProperties.TRACY_FINE_ZONES;
         if (ENABLED) {
             Runtime.getRuntime().addShutdownHook(new Thread(Tracy::shutdown, "Tracy-Shutdown"));
+            SECTIONS.registerCategory(SECTION_WORLD, "World");
+            SECTIONS.registerCategory(SECTION_SHADERS, "Shaders");
+            SECTIONS.registerCategory(SECTION_BENCHMARK, "Benchmark");
+            SECTIONS.registerCategory(SECTION_UI, "UI");
             LOGGER.info("Tracy profiling enabled");
         }
     }
@@ -95,6 +111,7 @@ public final class Tracy {
             LOGGER.warn("Tracy requested (-Dangelica.tracy=true) but no TracyBackend service present");
             return null;
         }
+        if (!implementsCurrentAbi(found)) return null;
         final TracyBackend backend = found;
         final CountDownLatch done = new CountDownLatch(1);
         final AtomicReference<Boolean> result = new AtomicReference<>();
@@ -120,10 +137,28 @@ public final class Tracy {
         return backend;
     }
 
+    private static final String ABI_SENTINEL = "sectionEnter";
+
+    private static boolean implementsCurrentAbi(TracyBackend backend) {
+        try {
+            backend.getClass().getMethod(ABI_SENTINEL, int.class, String.class);
+            return true;
+        } catch (NoSuchMethodException e) {
+            LOGGER.warn("Tracy backend {} was built against an older TracyBackend interface; profiling disabled", backend.getClass().getName());
+            return false;
+        }
+    }
+
     private record InitRunner(TracyBackend backend, CountDownLatch done, AtomicReference<Boolean> result) implements Runnable {
         @Override
         public void run() {
-            final boolean ok = backend.init();
+            boolean ok;
+            try {
+                ok = backend.init();
+            } catch (LinkageError e) {
+                LOGGER.warn("Tracy backend {} failed to link; profiling disabled: {}", backend.getClass().getName(), e);
+                ok = false;
+            }
             if (!result.compareAndSet(null, ok) && ok) {
                 backend.shutdown();
             }
@@ -168,7 +203,7 @@ public final class Tracy {
             final String name = stack.poppedName();
             if (name != null && WARNED_LEAKS.add(name)) {
                 LOGGER.warn("Tracy: unbalanced profiler section '{}' left open (leaked by its caller); closed at next root", name);
-                BACKEND.message("unbalanced profiler section '" + name + "' closed at root");
+                BACKEND.message("unbalanced profiler section '" + name + "' closed at root", TracyBackend.SEVERITY_WARNING);
             }
         }
     }
@@ -274,6 +309,7 @@ public final class Tracy {
             threadNameRefreshed = true;
             BACKEND.setCurrentThreadName(Thread.currentThread().getName());
         }
+        SECTIONS.poll();
         BACKEND.frameMark();
     }
 
@@ -330,8 +366,22 @@ public final class Tracy {
     }
 
     public static void message(String text) {
+        message(text, TracyBackend.SEVERITY_INFO);
+    }
+
+    public static void message(String text, int severity) {
         if (!ENABLED || SHUTTING_DOWN || !CaptureGate.markersThisFrame) return;
-        BACKEND.message(text);
+        BACKEND.message(text, severity);
+    }
+
+    public static long sectionEnter(int category, String text) {
+        if (!ENABLED || SHUTTING_DOWN) return 0L;
+        return SECTIONS.enter(category, text);
+    }
+
+    public static void sectionLeave(long token) {
+        if (token == 0L || !ENABLED || SHUTTING_DOWN) return;
+        SECTIONS.leave(token);
     }
 
     public static boolean isConnected() {
