@@ -160,6 +160,7 @@ public enum Mixins implements IMixins {
         .setApplyIf(() -> AngelicaConfig.enableTESRChestCache)
         .addClientMixins(
             "angelica.tesr.MixinTileEntityChestRenderer",
+            "angelica.tesr.MixinTileEntityChestRenderer_BindTexture",
             "angelica.tesr.MixinTileEntityEnderChestRenderer"
         )
     ),
@@ -394,6 +395,12 @@ public enum Mixins implements IMixins {
             , "celeritas.terrain.MixinDefaultChunkRenderer"
             , "celeritas.terrain.MixinDefaultChunkShaderInterface"
         )
+    ),
+
+    CELERITAS_CUBIC_CHUNKS(new MixinBuilder()
+        .setPhase(Phase.EARLY)
+        .addRequiredMod(TargetedMod.CUBIC_CHUNKS)
+        .addClientMixins("celeritas.terrain.MixinCubicChunksCube")
     ),
 
     CELERITAS_COLORED_LIGHT(new MixinBuilder("Colored light infrastructure for celeritas light pipeline")
