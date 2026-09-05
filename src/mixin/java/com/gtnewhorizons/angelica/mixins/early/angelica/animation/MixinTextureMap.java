@@ -30,7 +30,7 @@ public abstract class MixinTextureMap extends AbstractTexture {
     @Overwrite
     public void updateAnimations() {
         final boolean renderVisible = ClientProxy.options().performance.animateOnlyVisibleTextures;
-        
+
         Minecraft.getMinecraft().mcProfiler.startSection("updateAnimations");
         GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, this.getGlTextureId());
 
