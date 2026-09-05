@@ -20,7 +20,7 @@ public class GLSM_DirtyTracking_UnitTest {
 
     @BeforeEach
     void pushTrackedState() {
-        GLStateManager.glPushAttrib(GL11.GL_LIGHTING_BIT | GL11.GL_FOG_BIT | GL11.GL_CURRENT_BIT);
+        GLStateManager.glPushAttrib(GL11.GL_LIGHTING_BIT | GL11.GL_FOG_BIT | GL11.GL_CURRENT_BIT | GL11.GL_COLOR_BUFFER_BIT);
     }
 
     @AfterEach
@@ -120,6 +120,36 @@ public class GLSM_DirtyTracking_UnitTest {
 
         GLStateManager.glFogf(GL11.GL_FOG_DENSITY, 0.7F);
         assertEquals(gen + 1, GLStateManager.getFragmentGeneration(), "changed fog density must bump fragmentGeneration");
+    }
+
+    /** Verifies repeated alpha-test toggles do not invalidate unchanged fragment state. */
+    @Test
+    void alphaToggleBumpsOnlyOnChange() {
+        GLStateManager.disableAlphaTest();
+        final int disabledGen = GLStateManager.getFragmentGeneration();
+
+        GLStateManager.disableAlphaTest();
+        assertEquals(disabledGen, GLStateManager.getFragmentGeneration(), "repeated alpha disable must not bump fragmentGeneration");
+
+        GLStateManager.enableAlphaTest();
+        final int enabledGen = GLStateManager.getFragmentGeneration();
+        assertEquals(disabledGen + 1, enabledGen, "alpha enable must bump fragmentGeneration once");
+
+        GLStateManager.enableAlphaTest();
+        assertEquals(enabledGen, GLStateManager.getFragmentGeneration(), "repeated alpha enable must not bump fragmentGeneration");
+    }
+
+    /** Verifies repeated alpha comparisons do not invalidate unchanged fragment state. */
+    @Test
+    void alphaFunctionBumpsOnlyOnChange() {
+        GLStateManager.glAlphaFunc(GL11.GL_GREATER, 0.25F);
+        final int gen = GLStateManager.getFragmentGeneration();
+
+        GLStateManager.glAlphaFunc(GL11.GL_GREATER, 0.25F);
+        assertEquals(gen, GLStateManager.getFragmentGeneration(), "identical alpha comparison must not bump fragmentGeneration");
+
+        GLStateManager.glAlphaFunc(GL11.GL_GREATER, 0.5F);
+        assertEquals(gen + 1, GLStateManager.getFragmentGeneration(), "changed alpha reference must bump fragmentGeneration once");
     }
 
     @Test

@@ -1856,6 +1856,7 @@ public class GLStateManager {
     }
 
     // ALPHA
+    /** Enables fixed-function alpha testing and invalidates fragment state only when it changes. */
     public static void enableAlphaTest() {
         final GLContextState glCtx = ctx();
         final RecordMode mode = DisplayListManager.getRecordMode();
@@ -1871,6 +1872,9 @@ public class GLStateManager {
             ah.deferAlphaTestToggle(true);
             return;
         }
+        if (isCachingEnabled() && glCtx.alphaTest.isEnabled()) {
+            return;
+        }
         glCtx.alphaTest.enable();
         glCtx.fragmentGeneration++;
         if (GLSMHooks.ALPHA_STATE_CHANGE.hasListeners()) {
@@ -1878,6 +1882,7 @@ public class GLStateManager {
         }
     }
 
+    /** Disables fixed-function alpha testing and invalidates fragment state only when it changes. */
     public static void disableAlphaTest() {
         final GLContextState glCtx = ctx();
         final RecordMode mode = DisplayListManager.getRecordMode();
@@ -1893,6 +1898,9 @@ public class GLStateManager {
             ah.deferAlphaTestToggle(false);
             return;
         }
+        if (isCachingEnabled() && !glCtx.alphaTest.isEnabled()) {
+            return;
+        }
         glCtx.alphaTest.disable();
         glCtx.fragmentGeneration++;
         if (GLSMHooks.ALPHA_STATE_CHANGE.hasListeners()) {
@@ -1900,6 +1908,7 @@ public class GLStateManager {
         }
     }
 
+    /** Updates the fixed-function alpha comparison and skips identical cached values. */
     public static void glAlphaFunc(int function, float reference) {
         final GLContextState glCtx = ctx();
         final RecordMode mode = DisplayListManager.getRecordMode();
@@ -1915,6 +1924,10 @@ public class GLStateManager {
             return;
         }
         if (isCachingEnabled()) {
+            if (glCtx.alphaState.getFunction() == function
+                && Float.compare(glCtx.alphaState.getReference(), reference) == 0) {
+                return;
+            }
             glCtx.alphaState.setFunction(function);
             glCtx.alphaState.setReference(reference);
             glCtx.fragmentGeneration++;
