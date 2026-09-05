@@ -43,9 +43,13 @@ public final class CommonUniforms {
 	private static final Vector2i ZERO_VECTOR_2i = new Vector2i();
 	private static final Vector3d ZERO_VECTOR_3d = new Vector3d();
 
-	// Scratch vectors for push-notified suppliers -- GL thread only, never escapes
+	// Scratch vectors for uniform suppliers -- GL thread only and copied immediately by uniform caches.
 	private static final Vector2i scratch2i = new Vector2i();
 	private static final Vector4i scratch4i = new Vector4i();
+	private static final Vector2i eyeBrightnessScratch = new Vector2i();
+	private static final Vector2f eyeBrightnessSmoothFloatScratch = new Vector2f();
+	private static final Vector2i eyeBrightnessSmoothScratch = new Vector2i();
+	private static final Vector3d skyColorScratch = new Vector3d();
 
 	private CommonUniforms() {
 		// no construction allowed
@@ -143,8 +147,8 @@ public final class CommonUniforms {
             .uniform1f(PER_TICK, "playerMood", CommonUniforms::getPlayerMood)
 			.uniform2i(PER_FRAME, "eyeBrightness", CommonUniforms::getEyeBrightness)
 			.uniform2i(PER_FRAME, "eyeBrightnessSmooth", () -> {
-				final Vector2f smoothed = eyeBrightnessSmooth.get();
-				return new Vector2i((int) smoothed.x(),(int) smoothed.y());
+				final Vector2f smoothed = eyeBrightnessSmooth.get(eyeBrightnessSmoothFloatScratch);
+				return eyeBrightnessSmoothScratch.set((int) smoothed.x(), (int) smoothed.y());
 			})
 			.uniform1f(PER_TICK, "rainStrength", CommonUniforms::getRainStrength)
 			.uniform1f(PER_TICK, "wetness", new SmoothedFloat(directives.getWetnessHalfLife(), directives.getDrynessHalfLife(), CommonUniforms::getRainStrength, updateNotifier))
@@ -180,12 +184,13 @@ public final class CommonUniforms {
         return (client.thePlayer != null && client.thePlayer.isSprinting());
     }
 
+	/** Returns the current sky color through a reusable GL-thread scratch vector. */
 	private static Vector3d getSkyColor() {
         if (client.theWorld == null || client.renderViewEntity == null) {
 			return ZERO_VECTOR_3d;
 		}
         final Vec3 skyColor = client.theWorld.getSkyColor(client.renderViewEntity, CapturedRenderingState.INSTANCE.getTickDelta());
-        return new Vector3d(skyColor.xCoord, skyColor.yCoord, skyColor.zCoord);
+		return skyColorScratch.set(skyColor.xCoord, skyColor.yCoord, skyColor.zCoord);
 	}
 
 	static float getBlindness() {
@@ -225,13 +230,14 @@ public final class CommonUniforms {
 
 	}
 
+	/** Returns packed eye brightness through a reusable GL-thread scratch vector. */
 	private static Vector2i getEyeBrightness() {
         if (client.renderViewEntity == null || client.theWorld == null) {
 			return ZERO_VECTOR_2i;
 		}
         // This is what ShadersMod did in 1.7.10
         final int eyeBrightness = client.renderViewEntity.getBrightnessForRender(CapturedRenderingState.INSTANCE.getTickDelta());
-        return new Vector2i((eyeBrightness & 0xffff), (eyeBrightness >> 16));
+		return eyeBrightnessScratch.set(eyeBrightness & 0xffff, eyeBrightness >> 16);
 
 //		Vec3 feet = client.cameraEntity.position();
 //		Vec3 eyes = new Vec3(feet.x, client.cameraEntity.getEyeY(), feet.z);

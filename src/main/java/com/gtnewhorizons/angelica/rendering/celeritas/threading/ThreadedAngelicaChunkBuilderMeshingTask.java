@@ -91,11 +91,12 @@ public class ThreadedAngelicaChunkBuilderMeshingTask extends AngelicaChunkBuilde
         return enteredLocalMode;
     }
 
+    /** Uses the world-load safety cache and treats late, unknown ISBRHs as main-thread-only. */
     @Override
     protected boolean canRenderOffThread(Block block) {
         final int renderType = block.getRenderType();
         return (renderType >= 0 && renderType <= MAX_VANILLA_RENDER_TYPE)
-            || AngelicaBlockSafetyRegistry.canBlockRenderOffThread(block, true, true);
+            || AngelicaBlockSafetyRegistry.canBlockRenderOffThread(block, true, false);
     }
 
     @Override
