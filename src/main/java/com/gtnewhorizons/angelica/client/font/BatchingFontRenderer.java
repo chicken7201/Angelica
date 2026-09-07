@@ -288,6 +288,11 @@ public class BatchingFontRenderer {
             if (depthTestEnabled != GLStateManager.getDepthTest().isEffectivelyEnabled()) {
                 if (depthTestEnabled) GLStateManager.enableDepthTest(); else GLStateManager.disableDepthTest();
             }
+            applyDepthMaskAndPolygon();
+        }
+
+        /** Replays additional raster state while deferred loops track depth-test transitions as upstream does. */
+        void applyDepthMaskAndPolygon() {
             if (depthFunc != GLStateManager.getDepthState().getFunc()) {
                 GLStateManager.glDepthFunc(depthFunc);
             }
@@ -580,6 +585,7 @@ public class BatchingFontRenderer {
         dest.set(batchMatrixValid ? batchModelView : GLStateManager.getModelViewMatrix());
     }
 
+    /** Seals geometry with its draw-time raster state before subsequent GL changes. */
     private void sealBatchSegment() {
         final int end = batchCommands.size();
         if (end == batchSealedEnd) return;
@@ -721,13 +727,19 @@ public class BatchingFontRenderer {
         GLStateManager.glMatrixMode(GL11.GL_MODELVIEW);
         GLStateManager.glPushMatrix();
         try {
+            boolean curDepthTest = deferredRenderStateBefore.depthTestEnabled;
             for (final TextSegment segment : deferredSegments) {
                 final BatchingFontRenderer owner = segment.owner;
                 if (segment.cmdStart == segment.cmdEnd) continue;
 
                 GLStateManager.setModelViewMatrix(segment.modelView);
                 CapturedRenderingState.INSTANCE.setCurrentBlockEntity(segment.blockEntityId);
-                segment.renderState.apply();
+                segment.renderState.applyDepthMaskAndPolygon();
+
+                if (segment.renderState.depthTestEnabled != curDepthTest) {
+                    if (segment.renderState.depthTestEnabled) GLStateManager.enableDepthTest(); else GLStateManager.disableDepthTest();
+                    curDepthTest = segment.renderState.depthTestEnabled;
+                }
 
                 final FontDrawCmd[] cmdsData = owner.batchCommands.elements();
                 Arrays.sort(cmdsData, segment.cmdStart, segment.cmdEnd, FontDrawCmd.DRAW_ORDER_COMPARATOR);
@@ -786,13 +798,18 @@ public class BatchingFontRenderer {
         try {
             try (MemoryStack stack = stackPush()) {
                 final FloatBuffer mvpBuf = stack.mallocFloat(16);
+                boolean curDepthTest = deferredRenderStateBefore.depthTestEnabled;
                 for (final TextSegment segment : deferredSegments) {
                     mvpBuf.clear();
                     segment.mvp.get(mvpBuf);
                     GLStateManager.glUniformMatrix4(segment.owner.mvpMatrixLocation, false, mvpBuf);
                     uploadLightmap(segment.owner.lightmapLocation, segment.lightmapActive, segment.lightmapU,
                         segment.lightmapV, segment.lightmapTexture);
-                    segment.renderState.apply();
+                    if (segment.renderState.depthTestEnabled != curDepthTest) {
+                        if (segment.renderState.depthTestEnabled) GLStateManager.enableDepthTest(); else GLStateManager.disableDepthTest();
+                        curDepthTest = segment.renderState.depthTestEnabled;
+                    }
+                    segment.renderState.applyDepthMaskAndPolygon();
                     drawCommands(segment.owner.batchCommands.elements(), segment.cmdStart, segment.cmdEnd, segment.owner);
                 }
             }
