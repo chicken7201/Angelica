@@ -17,6 +17,7 @@ import org.apache.logging.log4j.Logger;
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.DataInputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -39,10 +40,22 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
 
     /** Registers this provider; the reloadable manager immediately supplies the initial resources. */
     private FontProviderUnicode() {
+        initializePageCreationLocks();
+        ((IReloadableResourceManager) Minecraft.getMinecraft().getResourceManager()).registerReloadListener(this);
+    }
+
+    /** Creates an isolated provider for tests without accessing the Minecraft singleton. */
+    FontProviderUnicode(IResourceManager resourceManager, byte[] glyphWidth) {
+        initializePageCreationLocks();
+        this.resourceManager = resourceManager;
+        this.glyphWidth = glyphWidth;
+    }
+
+    /** Initializes the per-page locks used to serialize lazy composition. */
+    private void initializePageCreationLocks() {
         for (int i = 0; i < this.pageCreationLocks.length; i++) {
             this.pageCreationLocks[i] = new Object();
         }
-        ((IReloadableResourceManager) Minecraft.getMinecraft().getResourceManager()).registerReloadListener(this);
     }
 
     /** Atomically installs a new glyph table and retires every page from the previous resource generation. */
@@ -122,6 +135,10 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
 
     /** Returns a current-generation page, composing it once on the CPU when absent. */
     private LoadedPage getPage(char chr) {
+        if (Character.isSurrogate(chr)) {
+            return null;
+        }
+
         final int pageIndex = chr >>> 8;
         LoadedPage page = getCachedPage(pageIndex, true);
         if (page != null) {
@@ -216,6 +233,14 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
         final ResourceLocation sourceLocation = getUnicodePageLocation(pageIndex);
         try {
             final List<BufferedImage> layers = loadPageLayers(pageIndex, manager);
+            if (layers.isEmpty()) {
+                LOGGER.debug(
+                    "Unicode font page unavailable: page={}, generation={}, location={}",
+                    pageLabel(pageIndex),
+                    generation,
+                    sourceLocation);
+                return new LoadedPage(pageIndex, generation, null, null);
+            }
             final UnicodeGlyphPage glyphPage = UnicodeGlyphPage.compose(layers);
             if (pageIndex == FontGlyphRanges.UNICODE_SUBSCRIPT_DIGIT_START >>> 8) {
                 try {
@@ -247,7 +272,12 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
     private List<BufferedImage> loadPageLayers(int pageIndex, IResourceManager manager) throws IOException {
         final ResourceLocation sourceLocation = getUnicodePageLocation(pageIndex);
         final List<BufferedImage> layers = new ArrayList<>();
-        final List<IResource> resources = manager.getAllResources(sourceLocation);
+        final List<IResource> resources;
+        try {
+            resources = manager.getAllResources(sourceLocation);
+        } catch (FileNotFoundException ignored) {
+            return layers;
+        }
         for (IResource resource : resources) {
             try (InputStream inputstream = resource.getInputStream()) {
                 final BufferedImage image = ImageIO.read(inputstream);
@@ -262,6 +292,9 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
 
     /** Uploads a current CPU page from a valid render context and returns its registered dynamic location. */
     private ResourceLocation ensurePageTexture(LoadedPage page) {
+        if (page == null || page.metrics == null) {
+            return null;
+        }
         if (!hasCurrentGlContext()) {
             synchronized (this.pageStateLock) {
                 if (!page.wrongThreadLogged) {
@@ -397,7 +430,7 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
 
     /** Reports whether a page is current while the page-state lock is already held. */
     private boolean isCurrentPageLocked(LoadedPage page) {
-        return page.generation == this.resourceGeneration && this.unicodePages[page.pageIndex] == page;
+        return page != null && page.generation == this.resourceGeneration && this.unicodePages[page.pageIndex] == page;
     }
 
     /** Formats a Unicode page number for rate-limited diagnostics. */
@@ -407,6 +440,10 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
 
     /** Returns an immutable rendering snapshot so reload cannot mix metrics from different page generations. */
     GlyphRenderInfo getRenderInfo(char chr) {
+        if (Character.isSurrogate(chr)) {
+            return null;
+        }
+
         for (int attempt = 0; attempt < 2; attempt++) {
             final LoadedPage page = getPage(chr);
             final byte packedBounds;
@@ -416,7 +453,8 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
                 }
                 packedBounds = this.glyphWidth[chr];
             }
-            if (!UnicodeGlyphMetrics.isAvailable(packedBounds) || !page.metrics.isGlyphAvailable(chr & 255)) {
+            if (page.metrics == null || !UnicodeGlyphMetrics.isAvailable(packedBounds)
+                || !page.metrics.isGlyphAvailable(chr & 255)) {
                 return null;
             }
 
@@ -482,6 +520,10 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
     /** Returns whether both glyph_sizes.bin and the composed texture contain this glyph. */
     @Override
     public boolean isGlyphAvailable(char chr) {
+        if (Character.isSurrogate(chr)) {
+            return false;
+        }
+
         for (int attempt = 0; attempt < 2; attempt++) {
             final LoadedPage page = getPage(chr);
             final byte packedBounds;
@@ -491,7 +533,8 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
                 }
                 packedBounds = this.glyphWidth[chr];
             }
-            return UnicodeGlyphMetrics.isAvailable(packedBounds) && page.metrics.isGlyphAvailable(chr & 255);
+            return page.metrics != null && UnicodeGlyphMetrics.isAvailable(packedBounds)
+                && page.metrics.isGlyphAvailable(chr & 255);
         }
         return false;
     }
@@ -505,7 +548,10 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
     /** Returns the composed bitmap UV, preserving declared GTNH custom-glyph bearings. */
     @Override
     public float getUStart(char chr) {
-        final UnicodeGlyphPage metrics = getPage(chr).metrics;
+        final UnicodeGlyphPage metrics = getPageMetrics(chr);
+        if (metrics == null) {
+            return 0.0F;
+        }
         final byte packedBounds = this.glyphWidth[chr];
         return FontGlyphRanges.isGtnhPrivateUseGlyph(chr)
             ? metrics.getDeclaredUStart(chr & 255, packedBounds)
@@ -515,13 +561,17 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
     /** Returns the composed glyph cell's top UV. */
     @Override
     public float getVStart(char chr) {
-        return getPage(chr).metrics.getVStart(chr & 255);
+        final UnicodeGlyphPage metrics = getPageMetrics(chr);
+        return metrics == null ? 0.0F : metrics.getVStart(chr & 255);
     }
 
     /** Returns cursor advance separately from atlas bounds and padding. */
     @Override
     public float getXAdvance(char chr) {
-        final UnicodeGlyphPage metrics = getPage(chr).metrics;
+        final UnicodeGlyphPage metrics = getPageMetrics(chr);
+        if (metrics == null) {
+            return 0.0F;
+        }
         final byte packedBounds = this.glyphWidth[chr];
         return FontGlyphRanges.isGtnhPrivateUseGlyph(chr)
             ? metrics.getDeclaredXAdvance(packedBounds)
@@ -531,7 +581,10 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
     /** Returns the screen quad width from the selected bitmap bounds. */
     @Override
     public float getGlyphW(char chr) {
-        final UnicodeGlyphPage metrics = getPage(chr).metrics;
+        final UnicodeGlyphPage metrics = getPageMetrics(chr);
+        if (metrics == null) {
+            return 0.0F;
+        }
         final byte packedBounds = this.glyphWidth[chr];
         return FontGlyphRanges.isGtnhPrivateUseGlyph(chr)
             ? metrics.getDeclaredGlyphWidth(packedBounds)
@@ -541,7 +594,10 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
     /** Returns the composed bitmap UV span, preserving GTNH custom-glyph bounds. */
     @Override
     public float getUSize(char chr) {
-        final UnicodeGlyphPage metrics = getPage(chr).metrics;
+        final UnicodeGlyphPage metrics = getPageMetrics(chr);
+        if (metrics == null) {
+            return 0.0F;
+        }
         final byte packedBounds = this.glyphWidth[chr];
         return FontGlyphRanges.isGtnhPrivateUseGlyph(chr)
             ? metrics.getDeclaredUSize(packedBounds)
@@ -551,31 +607,42 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
     /** Returns one composed Unicode cell's vertical UV span. */
     @Override
     public float getVSize(char chr) {
-        return getPage(chr).metrics.getVSize();
+        final UnicodeGlyphPage metrics = getPageMetrics(chr);
+        return metrics == null ? 0.0F : metrics.getVSize();
     }
 
     /** Keeps anti-aliasing samples inside the glyph's atlas cell. */
     @Override
     public float getSampleUStart(char chr) {
-        return getPage(chr).metrics.getSampleUStart(chr & 255);
+        final UnicodeGlyphPage metrics = getPageMetrics(chr);
+        return metrics == null ? 0.0F : metrics.getSampleUStart(chr & 255);
     }
 
     /** Keeps anti-aliasing samples away from the next horizontal atlas cell. */
     @Override
     public float getSampleUEnd(char chr) {
-        return getPage(chr).metrics.getSampleUEnd(chr & 255);
+        final UnicodeGlyphPage metrics = getPageMetrics(chr);
+        return metrics == null ? 0.0F : metrics.getSampleUEnd(chr & 255);
     }
 
     /** Keeps anti-aliasing samples inside the glyph's atlas cell. */
     @Override
     public float getSampleVStart(char chr) {
-        return getPage(chr).metrics.getSampleVStart(chr & 255);
+        final UnicodeGlyphPage metrics = getPageMetrics(chr);
+        return metrics == null ? 0.0F : metrics.getSampleVStart(chr & 255);
     }
 
     /** Keeps anti-aliasing samples away from the next vertical atlas cell. */
     @Override
     public float getSampleVEnd(char chr) {
-        return getPage(chr).metrics.getSampleVEnd(chr & 255);
+        final UnicodeGlyphPage metrics = getPageMetrics(chr);
+        return metrics == null ? 0.0F : metrics.getSampleVEnd(chr & 255);
+    }
+
+    /** Returns page metrics only for renderable BMP code units backed by an existing page. */
+    private UnicodeGlyphPage getPageMetrics(char chr) {
+        final LoadedPage page = getPage(chr);
+        return page == null ? null : page.metrics;
     }
 
     /** Returns the configured shadow offset for Unicode glyphs. */
@@ -587,8 +654,18 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
     /** Returns the registered texture for a current page, or null while upload must be deferred. */
     @Override
     public ResourceLocation getTexture(char chr) {
+        if (Character.isSurrogate(chr)) {
+            return null;
+        }
+
         for (int attempt = 0; attempt < 2; attempt++) {
             final LoadedPage page = getPage(chr);
+            if (page.metrics == null) {
+                if (isCurrentPage(page)) {
+                    return null;
+                }
+                continue;
+            }
             final ResourceLocation texture = ensurePageTexture(page);
             if (texture != null || isCurrentPage(page)) {
                 return texture;
