@@ -24,6 +24,7 @@ public class AngelicaRenderPassConfiguration {
     @Getter
     private static boolean rgssEnabled;
 
+    /** Creates a terrain pass builder with Angelica's shared pipeline state. */
     private static TerrainRenderPass.TerrainRenderPassBuilder builderForRenderType(int pass, boolean disableAlphaTest, ChunkVertexType vertexType) {
         final TerrainRenderPass.TerrainRenderPassBuilder builder = TerrainRenderPass.builder()
             .pipelineState(new AngelicaPipelineState(pass, disableAlphaTest))
@@ -37,6 +38,7 @@ public class AngelicaRenderPassConfiguration {
         return builder;
     }
 
+    /** Builds the terrain passes and maps Minecraft render layers to them. */
     public static RenderPassConfiguration<BlockRenderLayer> build(ChunkVertexType vertexType) {
         rgssEnabled = SodiumGameOptions.effectiveTextureFilterMode() == TextureFilterMode.RGSS;
 
@@ -80,20 +82,29 @@ public class AngelicaRenderPassConfiguration {
         return new RenderPassConfiguration<>(renderTypeToMaterialMap, vanillaRenderStages.build().asMap(), CUTOUT_MIPPED_MATERIAL, CUTOUT_MIPPED_MATERIAL, TRANSLUCENT_MATERIAL);
     }
 
+    /** Restores the depth state terrain needs to occlude later block-entity draws. */
+    static void applyTerrainDepthState() {
+        GLStateManager.enableDepthTest();
+        GLStateManager.glDepthFunc(GL11.GL_LEQUAL);
+        GLStateManager.glDepthMask(true);
+    }
+
     private static final class AngelicaPipelineState implements TerrainRenderPass.PipelineState {
         private final int pass;
         private final boolean disableAlphaTest;
         private int savedAlphaFunction;
         private float savedAlphaReference;
 
+        /** Stores the pass-specific alpha-test behavior. */
         private AngelicaPipelineState(int pass, boolean disableAlphaTest) {
             this.pass = pass;
             this.disableAlphaTest = disableAlphaTest;
         }
 
+        /** Applies the complete fixed-function state required before drawing terrain. */
         @Override
         public void setup() {
-            GLStateManager.glDepthMask(true);
+            applyTerrainDepthState();
 
             if (pass == 0) {
                 final var alphaState = GLStateManager.getAlphaState();
@@ -106,6 +117,7 @@ public class AngelicaRenderPassConfiguration {
             }
         }
 
+        /** Restores the alpha-test state changed by this terrain pass. */
         @Override
         public void clear() {
             if (pass == 0) {
