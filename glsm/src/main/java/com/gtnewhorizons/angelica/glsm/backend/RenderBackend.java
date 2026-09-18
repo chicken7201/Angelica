@@ -3,6 +3,7 @@ package com.gtnewhorizons.angelica.glsm.backend;
 import com.gtnewhorizon.gtnhlib.bytebuf.MemoryUtilities;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.RenderSystem;
+import org.lwjgl.LWJGLException;
 import org.lwjgl.opengl.Display;
 import org.lwjgl.opengl.GL20;
 
@@ -251,9 +252,16 @@ public abstract class RenderBackend {
     public boolean handleSwapBuffers() { return false; }
     public void onRenderThreadReleased(Thread thread) {}
 
+    public void updateDisplayFromWorkerThread(boolean processMessages) throws LWJGLException {
+        GLStateManager.swapBuffers();
+        if (processMessages) {
+            pumpDisplayMessages();
+        }
+    }
+
     public String getTransferDebugInfo() { return null; }
 
-    public boolean bindVoxelizationRegion(int ssboBinding, int vertexBufferGlId, long openPass, float x, float y, float z) { return false; }
+    public boolean bindVoxelizationRegion(int ssboBinding, long openPass, float x, float y, float z) { return false; }
     public long beginVoxelizationBatch(int ssboBinding) { return 0L; }
     public void voxelizeRange(long pass, int vertexOffset, int vertexCount) {}
     public void endVoxelizationBatch(long pass) {}

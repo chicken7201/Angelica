@@ -3,6 +3,7 @@ package com.gtnewhorizons.angelica.client.font;
 import com.gtnewhorizons.angelica.config.FontConfig;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.backend.BackendManager;
+import jss.util.RandomXoshiro256StarStar;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.client.renderer.texture.TextureManager;
@@ -34,6 +35,7 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
     private final LoadedPage[] unicodePages = new LoadedPage[PAGE_COUNT];
     private final List<LoadedPage> retiredPages = new ArrayList<>();
     private final int[] pageCreationCounts = new int[PAGE_COUNT];
+    private final RandomXoshiro256StarStar fontRandom = new RandomXoshiro256StarStar();
     private volatile byte[] glyphWidth = new byte[UnicodeGlyphMetrics.GLYPH_COUNT];
     private volatile IResourceManager resourceManager;
     private volatile int resourceGeneration;
@@ -539,9 +541,24 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
         return false;
     }
 
-    /** Keeps Unicode glyphs unchanged for random-format replacement. */
+    /**
+     * A random glyph of the same width, for {@code §k}. Kept inside the character's own
+     * 256-glyph page so the swap neither pulls in another page's texture nor splits the
+     * batch. Empty entries are left alone, and never swapped in for a glyph that draws.
+     */
     @Override
     public char getRandomReplacement(char chr) {
+        if (this.glyphWidth[chr] == 0) {
+            return chr;
+        }
+        final int pageStart = (chr / 256) * 256;
+        final float targetWidth = getXAdvance(chr);
+        for (int attempt = 0; attempt < RANDOM_GLYPH_TRIES; attempt++) {
+            final char candidate = (char) (pageStart + fontRandom.nextInt(256));
+            if (this.glyphWidth[candidate] != 0 && getXAdvance(candidate) == targetWidth) {
+                return candidate;
+            }
+        }
         return chr;
     }
 

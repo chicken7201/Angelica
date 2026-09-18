@@ -64,6 +64,7 @@ public enum Mixins implements IMixins {
             , "angelica.ffp.MixinTessellator_CoreProfile"
             , "angelica.glsm.MixinSplashProgressCaching"
             , "angelica.gui.MixinGuiOptions"
+            , "angelica.optimizations.MixinRenderBiped_ArmorResource"
             , "angelica.optimizations.MixinRendererLivingEntity"
             , "angelica.rendering.MixinRenderGlobal_SelectionBox"
             , "angelica.gui.MixinGuiIngameForge_ModernF3"
@@ -171,12 +172,26 @@ public enum Mixins implements IMixins {
         .setPhase(Phase.EARLY)
         .setApplyIf(() -> AngelicaConfig.enableEntityBatching)
         .addClientMixins(
+            "angelica.entity.MixinItemRenderer_Instanced",
             "angelica.entity.MixinModelRenderer",
             "angelica.entity.MixinRenderGlobal_EntityBatch",
+            "angelica.entity.MixinRenderItem_Instanced",
             "angelica.entity.MixinRenderManager_BatchEligibility",
+            "angelica.entity.MixinRendererLivingEntity_EquippedDraws",
+            "angelica.entity.MixinRendererLivingEntity_GlintClock",
+            "angelica.entity.MixinRendererLivingEntity_ModelPassDraws",
             "angelica.entity.MixinRender_BatchEligibility",
+            "angelica.entity.MixinRender_ShadowBatch",
             "angelica.entity.MixinTextureManager",
             "angelica.tesr.MixinTileEntitySpecialRenderer_BatchEligibility"
+        )
+    ),
+
+    ANGELICA_CUBE_INSTANCING(new MixinBuilder("Capture cuboid parameters so model cubes can be drawn from a shared unit cube")
+        .setPhase(Phase.EARLY)
+        .setApplyIf(AngelicaConfig::cubeInstancingEnabled)
+        .addClientMixins(
+            "angelica.entity.MixinModelBox_CubeParams"
         )
     ),
 
@@ -243,6 +258,18 @@ public enum Mixins implements IMixins {
             , "celeritas.debug.MixinGLDebug"
         )
     ),
+
+    ANGELICA_FLYBY(new MixinBuilder("Flyby benchmark scene support: freeze world saving, hold chunks, suppress undead sunlight burn")
+        .setPhase(Phase.EARLY)
+        .setApplyIf(() -> SystemProperties.debugTooling())
+        .addClientMixins(
+              "angelica.debug.MixinSaveHandler_FlybyDiscard"
+            , "angelica.debug.MixinAnvilChunkLoader_FlybyDiscard"
+            , "angelica.debug.MixinWorldServer_FlybyDiscard"
+            , "angelica.debug.MixinEntityUndead_FlybySunlight"
+        )
+    ),
+
     ANGELICA_DYNAMIC_LIGHTS(new MixinBuilder()
         .setPhase(Phase.EARLY)
         .setApplyIf(() -> AngelicaConfig.enableDynamicLights)
@@ -287,9 +314,9 @@ public enum Mixins implements IMixins {
         .setPhase(Phase.EARLY)
         .addClientMixins("angelica.optimizations.MixinGLAllocation")),
 
-    ANGELICA_DEFERRED_TESSELLATOR_BATCH(new MixinBuilder("Deferred tessellator batching for particles to reduce draw calls")
+    ANGELICA_PARTICLE_BATCH(new MixinBuilder("Particle instancing, with deferred tessellator batching as the fallback")
         .setPhase(Phase.EARLY)
-        .addClientMixins("angelica.particles.MixinEffectRenderer_DeferredBatch")),
+        .addClientMixins("angelica.particles.MixinEffectRenderer_ParticleBatch")),
 
     // Not compatible with the lwjgl debug callbacks, so disable if that's enabled
     ARCHAIC_SPLASH(new MixinBuilder()
@@ -373,6 +400,7 @@ public enum Mixins implements IMixins {
             , "celeritas.features.mipmaps.MixinTextureMetadataSectionSerializer"
             , "celeritas.features.textures.MixinTextureMap"
             , "celeritas.features.textures.MixinTextureAtlasSprite"
+            , "celeritas.features.textures.MixinStitcherHolder"
             , "celeritas.biome_blending.MixinBlockGrass"
             , "celeritas.biome_blending.MixinBlockLeaves"
             , "celeritas.biome_blending.MixinBlockLiquid"
@@ -772,6 +800,11 @@ public enum Mixins implements IMixins {
         .addRequiredMod(TargetedMod.DRAGON_API)
         .setApplyIf(() -> AngelicaConfig.enableIris)
         .addClientMixins("client.dragonapi.MixinThrottleableEffectRenderer")
+    ),
+    DRAGONAPI_PARTICLE_BATCH(new MixinBuilder("Particle instancing for DragonAPI's replacement particle renderer")
+        .setPhase(Phase.LATE)
+        .addRequiredMod(TargetedMod.DRAGON_API)
+        .addClientMixins("client.dragonapi.MixinThrottleableEffectRenderer_ParticleBatch")
     ),
     MCPATCHER_FORGE(new MixinBuilder()
         .setPhase(Phase.EARLY)

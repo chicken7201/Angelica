@@ -11,6 +11,7 @@ import com.gtnewhorizons.angelica.sdlgpu.SDLGPURenderBackend;
 import com.gtnewhorizons.angelica.sdlgpu.SdlTestRig;
 import com.gtnewhorizons.angelica.sdlgpu.pipeline.PipelineCache;
 import com.gtnewhorizons.angelica.sdlgpu.resource.ResourceManager;
+import it.unimi.dsi.fastutil.ints.Int2IntMap;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL13;
@@ -85,6 +86,12 @@ public final class GlsmSdlHeadlessRig {
         endFrame();
     }
 
+    public static int glsmBufferBinding(int target) {
+        final Object ctx = Reflect.getStatic(GLStateManager.class, "primaryContext");
+        final Int2IntMap bound = Reflect.get(ctx, "boundOtherBuffers");
+        return bound.get(target);
+    }
+
     private static int colorTargetSdlFormat() {
         final ResourceManager rm = Reflect.get(BackendManager.RENDER_BACKEND, "resourceManager");
         final ResourceManager.TextureMeta meta = rm.getTextureMeta(colorTexture);
@@ -113,6 +120,12 @@ public final class GlsmSdlHeadlessRig {
     public static void clearTo(float r, float g, float b, float a) {
         GLStateManager.glClearColor(r, g, b, a);
         GLStateManager.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
+    }
+
+    public static void beginFrameAndClear() {
+        beginFrame();
+        bindTarget();
+        clearTo(0.0f, 0.0f, 0.0f, 1.0f);
     }
 
     public static void beginFrameAndReset() {
