@@ -1,11 +1,13 @@
 package com.gtnewhorizons.angelica.client.font;
 
+import com.gtnewhorizons.angelica.glsm.DisplayListManager;
 import com.gtnewhorizons.angelica.glsm.GLCoreTest;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.StateSet;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.lwjgl.opengl.GL11;
 
@@ -15,6 +17,58 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @GLCoreTest
 class FontRenderStateGLTest {
+
+    /** Verifies compiled font scopes record raster state even when it matches the compilation context. */
+    @ParameterizedTest
+    @CsvSource({"false, false", "false, true", "true, false", "true, true"})
+    void displayListReplaysCapturedStateAndRestoresCaller(boolean pipeline, boolean execute) {
+        GLStateManager.enableDepthTest();
+        GLStateManager.glDepthFunc(GL11.GL_LEQUAL);
+        GLStateManager.glDepthMask(true);
+        GLStateManager.glPolygonOffset(-10.0f, -10.0f);
+        GLStateManager.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
+        final BatchingFontRenderer.FontRenderState captured = new BatchingFontRenderer.FontRenderState();
+        captured.capture();
+        final BatchingFontRenderer.FontRenderState replayed = new BatchingFontRenderer.FontRenderState();
+        final int initialDepth = GLStateManager.getAttribDepth();
+        final int list = GLStateManager.glGenLists(1);
+        try {
+            GLStateManager.glNewList(list, execute ? GL11.GL_COMPILE_AND_EXECUTE : GL11.GL_COMPILE);
+            final int depth = GLStateManager.pushState(pipeline ? StateSet.FONT_PIPELINE : StateSet.FONT);
+            captured.apply();
+            DisplayListManager.recordComplexCommand(replayed::capture);
+            GLStateManager.popStateTo(depth);
+            GLStateManager.glEndList();
+            assertEquals(initialDepth, GLStateManager.getAttribDepth(), "balanced compilation scope");
+
+            GLStateManager.disableDepthTest();
+            GLStateManager.glDepthFunc(GL11.GL_ALWAYS);
+            GLStateManager.glDepthMask(false);
+            GLStateManager.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
+            GLStateManager.glPolygonOffset(1.0f, 2.0f);
+            final BatchingFontRenderer.FontRenderState caller = new BatchingFontRenderer.FontRenderState();
+            caller.capture();
+
+            for (int replay = 0; replay < 2; replay++) {
+                GLStateManager.glCallList(list);
+                assertTrue(captured.sameAs(replayed), "compiled segment raster state");
+                final BatchingFontRenderer.FontRenderState restored = new BatchingFontRenderer.FontRenderState();
+                restored.capture();
+                assertTrue(caller.sameAs(restored), "caller state after list replay");
+                assertEquals(initialDepth, GLStateManager.getAttribDepth(), "balanced replay scope");
+                assertFalse(GL11.glIsEnabled(GL11.GL_DEPTH_TEST), "driver depth test");
+                assertEquals(GL11.GL_ALWAYS, GL11.glGetInteger(GL11.GL_DEPTH_FUNC), "driver depth function");
+                assertFalse(GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK), "driver depth write mask");
+                assertFalse(GL11.glIsEnabled(GL11.GL_POLYGON_OFFSET_FILL), "driver polygon offset");
+                assertEquals(1.0f, GL11.glGetFloat(GL11.GL_POLYGON_OFFSET_FACTOR), "driver offset factor");
+                assertEquals(2.0f, GL11.glGetFloat(GL11.GL_POLYGON_OFFSET_UNITS), "driver offset units");
+            }
+        } finally {
+            DisplayListManager.abortCompilation();
+            GLStateManager.popStateTo(initialDepth);
+            GLStateManager.glDeleteLists(list, 1);
+        }
+    }
 
     /** Verifies upstream state scopes restore the caller after glyphfix replays multiple text segments. */
     @ParameterizedTest

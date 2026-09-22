@@ -281,33 +281,16 @@ public class BatchingFontRenderer {
 
         /** Replays this segment's raster state before its deferred geometry is drawn. */
         void apply() {
-            if (depthTestEnabled != GLStateManager.getDepthTest().isEffectivelyEnabled()) {
-                if (depthTestEnabled) GLStateManager.enableDepthTest(); else GLStateManager.disableDepthTest();
-            }
-            if (depthFunc != GLStateManager.getDepthState().getFunc()) {
-                GLStateManager.glDepthFunc(depthFunc);
-            }
-            if (depthMask != GLStateManager.isEffectiveDepthMaskEnabled()) {
-                GLStateManager.glDepthMask(depthMask);
-            }
+            // GLSM owns state deduplication; skipping setters here drops commands during display-list compilation.
+            if (depthTestEnabled) GLStateManager.enableDepthTest(); else GLStateManager.disableDepthTest();
+            GLStateManager.glDepthFunc(depthFunc);
+            GLStateManager.glDepthMask(depthMask);
 
-            final PolygonState polygon = GLStateManager.getPolygonState();
-            if (polygonOffsetFactor != polygon.getOffsetFactor() || polygonOffsetUnits != polygon.getOffsetUnits()
-                || polygonOffsetClamp != polygon.getOffsetClamp()) {
-                if (polygonOffsetClamp == 0.0f) {
-                    GLStateManager.glPolygonOffset(polygonOffsetFactor, polygonOffsetUnits);
-                } else {
-                    GLStateManager.glPolygonOffsetClamp(
-                        polygonOffsetFactor, polygonOffsetUnits, polygonOffsetClamp);
-                }
-            }
-            if (polygonOffsetFillEnabled
-                != GLStateManager.getPolygonOffsetFillState().isEffectivelyEnabled()) {
-                if (polygonOffsetFillEnabled) {
-                    GLStateManager.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
-                } else {
-                    GLStateManager.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
-                }
+            GLStateManager.glPolygonOffsetClamp(polygonOffsetFactor, polygonOffsetUnits, polygonOffsetClamp);
+            if (polygonOffsetFillEnabled) {
+                GLStateManager.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
+            } else {
+                GLStateManager.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
             }
         }
     }
