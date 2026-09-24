@@ -34,7 +34,10 @@ public class Program {
     @Getter private final FragmentKey fragmentKey;
 
     public final int[] locSampler = { -1, -1, -1, -1 };
+    private final int[] locWeather = { -1, -1, -1 };
+    private int weatherGeneration = Integer.MIN_VALUE;
 
+    /** Caches sampler and weather-only uniform locations for this linked FFP variant. */
     Program(int programId, VertexKey vertexKey, FragmentKey fragmentKey) {
         this.programId = programId;
         this.vertexKey = vertexKey;
@@ -42,6 +45,29 @@ public class Program {
         for (int i = 0; i < 4; i++) {
             locSampler[i] = RENDER_BACKEND.getUniformLocation(programId, "u_Sampler" + i);
         }
+        if (vertexKey.instancing() == Instancing.WEATHER) {
+            for (int i = 0; i < locWeather.length; i++) {
+                locWeather[i] = RENDER_BACKEND.getUniformLocation(programId, "u_WeatherParams" + i);
+            }
+        }
+    }
+
+    /** Uploads rain and snow values to this weather program without changing the common FFP block layout. */
+    void uploadWeatherParams() {
+        if (vertexKey.instancing() != Instancing.WEATHER || weatherGeneration == WeatherParams.generation) return;
+        if (locWeather[0] != -1) {
+            RENDER_BACKEND.uniform4f(locWeather[0], WeatherParams.translateX, WeatherParams.translateY,
+                WeatherParams.translateZ, WeatherParams.invRadius);
+        }
+        if (locWeather[1] != -1) {
+            RENDER_BACKEND.uniform4f(locWeather[1], WeatherParams.cameraFracX, WeatherParams.cameraFracZ,
+                WeatherParams.partialTicks, WeatherParams.age);
+        }
+        if (locWeather[2] != -1) {
+            RENDER_BACKEND.uniform4f(locWeather[2], WeatherParams.rainScroll, WeatherParams.snowScroll,
+                WeatherParams.rainStrength, 0.0f);
+        }
+        weatherGeneration = WeatherParams.generation;
     }
 
     public void destroy() {

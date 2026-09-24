@@ -178,9 +178,11 @@ public final class ShaderManager {
         }
     }
 
+    /** Uploads shared FFP state and any weather values needed by the selected program. */
     private void uploadUniforms(GLContextState glCtx) {
         if (currentProgram != null) {
             uniforms.upload(glCtx);
+            currentProgram.uploadWeatherParams();
         }
     }
 

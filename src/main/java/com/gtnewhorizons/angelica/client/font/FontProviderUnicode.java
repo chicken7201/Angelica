@@ -14,6 +14,8 @@ import net.minecraft.client.resources.IResourceManagerReloadListener;
 import net.minecraft.util.ResourceLocation;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL13;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -23,6 +25,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Supplier;
 
 public final class FontProviderUnicode implements FontProvider, IResourceManagerReloadListener {
 
@@ -349,7 +352,7 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
                 pageLabel(page.pageIndex),
                 page.generation,
                 Thread.currentThread().getName());
-            page.dynamicTexture = new DynamicTexture(page.image);
+            page.dynamicTexture = withPageTextureBindingPreserved(() -> new DynamicTexture(page.image));
             page.texture = textureManager.getDynamicTextureLocation(
                 String.format("angelica_unicode_page_%02x", page.pageIndex),
                 page.dynamicTexture);
@@ -377,7 +380,10 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
                     !uploadMissing);
             }
             if (uploadMissing) {
-                page.dynamicTexture.updateDynamicTexture();
+                withPageTextureBindingPreserved(() -> {
+                    page.dynamicTexture.updateDynamicTexture();
+                    return null;
+                });
             }
             if (registrationMissing) {
                 textureManager.loadTexture(page.texture, page.dynamicTexture);
@@ -392,6 +398,18 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
         }
 
         return textureManager.getTexture(page.texture) == page.dynamicTexture ? page.texture : null;
+    }
+
+    /** Keeps a lazy Unicode page upload from replacing the texture bound by the caller before font state is saved. */
+    static <T> T withPageTextureBindingPreserved(Supplier<T> upload) {
+        final int activeUnit = GLStateManager.getActiveTextureUnitForServerState();
+        final int previousTexture = GLStateManager.getBoundTextureForServerState();
+        try {
+            return upload.get();
+        } finally {
+            GLStateManager.glActiveTexture(GL13.GL_TEXTURE0 + activeUnit);
+            GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, previousTexture);
+        }
     }
 
     /** Removes retired dynamic pages only while no font draw can use their old generation. */

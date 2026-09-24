@@ -102,8 +102,14 @@ public final class VertexShaderGenerator {
         sb.append("  v_LineStart = u_Viewport.xy + (ndc * 0.5 + 0.5) * u_Viewport.zw;\n\n");
     }
 
+    /** Keeps weather-only values outside the shared FFP block used by ordinary GUI and font draws. */
     private static void emitUniforms(StringBuilder sb, VertexKey key) {
         sb.append(FFPUniformBlock.GLSL_DECL);
+        if (key.instancing() == Instancing.WEATHER) {
+            sb.append("uniform vec4 u_WeatherParams0;\n");
+            sb.append("uniform vec4 u_WeatherParams1;\n");
+            sb.append("uniform vec4 u_WeatherParams2;\n");
+        }
         sb.append('\n');
     }
 
