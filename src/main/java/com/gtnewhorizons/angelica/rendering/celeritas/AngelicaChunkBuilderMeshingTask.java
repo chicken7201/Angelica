@@ -62,14 +62,18 @@ public abstract class AngelicaChunkBuilderMeshingTask extends ChunkBuilderTask<C
     protected final RenderSection render;
     protected final int buildTime;
     protected final Vector3d camera;
+    private final int ambientOcclusionLevel;
 
     private DeferredMeshScheduler scheduler;
     private boolean important;
 
+    /** Captures the main-thread lighting option before HUD renderers temporarily change it. */
     public AngelicaChunkBuilderMeshingTask(RenderSection render, int time, Vector3d camera) {
         this.render = render;
         this.buildTime = time;
         this.camera = camera;
+        final Minecraft mc = Minecraft.getMinecraft();
+        this.ambientOcclusionLevel = mc != null && mc.gameSettings != null ? mc.gameSettings.ambientOcclusion : 0;
     }
 
     protected abstract Tessellator getTessellator();
@@ -100,6 +104,7 @@ public abstract class AngelicaChunkBuilderMeshingTask extends ChunkBuilderTask<C
 
     protected void addExtraCrashInfo(CrashReportCategory category) {}
 
+    /** Builds worker geometry with the task's lighting snapshot and safely releases its render context. */
     @Override
     public ChunkBuildOutput execute(ChunkBuildContext context, CancellationToken cancellationToken) {
         final long start = System.nanoTime();
@@ -131,7 +136,7 @@ public abstract class AngelicaChunkBuilderMeshingTask extends ChunkBuilderTask<C
 
         ChunkBuildBuffers handoffBuffers = null;
 
-        try {
+        try (var lighting = ChunkRenderSettings.withAmbientOcclusion(this.ambientOcclusionLevel)) {
             final boolean threaded = isThreaded();
             final long[] deferredMask = buildContext.getDeferredMask();
             final boolean handoff;
@@ -358,6 +363,7 @@ public abstract class AngelicaChunkBuilderMeshingTask extends ChunkBuilderTask<C
         return (mask[bit >>> 6] & (1L << bit)) != 0;
     }
 
+    /** Finishes deferred geometry on the main thread using the same lighting snapshot as its worker. */
     ChunkJobResult<ChunkBuildOutput> completeDeferred(DeferredSectionMesh m, AngelicaChunkBuildContext ctx) {
         final long start = System.nanoTime();
 
@@ -375,7 +381,7 @@ public abstract class AngelicaChunkBuilderMeshingTask extends ChunkBuilderTask<C
             Tracy.zoneValue(blocks.size());
         }
 
-        try {
+        try (var lighting = ChunkRenderSettings.withAmbientOcclusion(this.ambientOcclusionLevel)) {
             ctx.setupLightPipeline(slice, minX, minY, minZ);
             ctx.setupDynamicLights(minX, minY, minZ);
             slice.setRenderingBlock(null);

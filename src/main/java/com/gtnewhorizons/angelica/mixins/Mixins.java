@@ -395,6 +395,7 @@ public enum Mixins implements IMixins {
         .addClientMixins(
               "celeritas.terrain.MixinChunkProviderClient"
             , "celeritas.terrain.MixinMinecraft_ChunkUpdates"
+            , "celeritas.terrain.MixinMinecraft_ChunkLighting"
             , "celeritas.terrain.MixinRenderGlobal"
             , "celeritas.terrain.MixinRenderSectionManager"
             , "celeritas.terrain.MixinWorldClient"
@@ -422,6 +423,12 @@ public enum Mixins implements IMixins {
             , "celeritas.terrain.MixinSectionRenderDataStorage"
             , "celeritas.terrain.MixinDefaultChunkShaderInterface"
         )
+    ),
+
+    CELERITAS_GREGTECH_LIGHTING(new MixinBuilder("Use captured chunk lighting for GregTech block meshes")
+        .setPhase(Phase.LATE)
+        .addRequiredMod(TargetedMod.GREGTECH)
+        .addClientMixins("client.gregtech.MixinSBRWorldContext")
     ),
 
     CELERITAS_CUBIC_CHUNKS(new MixinBuilder()
