@@ -121,19 +121,22 @@ public final class ShaderManager {
         lastBoundProgramId = GLStateManager.getActiveProgram();
     }
 
-    /** Discards the driver binding so state replay cannot reuse an unbound FFP program. */
+    /** Invalidates context-local program and uniform bindings without discarding cached variants or data. */
     public static void invalidateBoundProgram() {
         final ShaderManager sm = Holder.INSTANCE;
         sm.lastBoundProgramId = -1;
         sm.currentProgram = null;
+        sm.uniforms.invalidateBinding();
     }
 
+    /** Stops FFP emulation and allows another shader to replace its context-local uniform binding. */
     public void deactivate() {
         active = false;
         currentProgram = null;
         lastBoundProgramId = -1;
         currentVertexKeyPacked = Long.MIN_VALUE;
         currentFKLen = 0;
+        uniforms.invalidateBinding();
         GLStateManager.forceAttribDefaultsDirty();
     }
 

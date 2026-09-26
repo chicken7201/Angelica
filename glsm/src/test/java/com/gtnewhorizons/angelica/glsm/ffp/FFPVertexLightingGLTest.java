@@ -3,6 +3,7 @@ package com.gtnewhorizons.angelica.glsm.ffp;
 import com.gtnewhorizon.gtnhlib.client.renderer.vertex.VertexFormatElement;
 import com.gtnewhorizons.angelica.glsm.GLCoreTest;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
+import com.gtnewhorizons.angelica.glsm.hooks.FrameHooks;
 import org.joml.Vector3f;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -12,6 +13,8 @@ import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL20;
+import org.lwjgl.opengl.GL30;
+import org.lwjgl.opengl.GL31;
 
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
@@ -200,6 +203,86 @@ class FFPVertexLightingGLTest {
             }
             assertEquals(GL11.GL_NO_ERROR, GL11.glGetError(), "replayed FFP draw must not raise a GL error");
         }
+    }
+
+    /** Restores FFP only on the first game frame when loading left a foreign shader selected. */
+    @Test
+    void firstGameFrameRestoresFfpAfterLoadingShader() throws ReflectiveOperationException {
+        final float[] expected = drawAndReadCenter();
+        final int program = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
+        final ShaderManager manager = ShaderManager.getInstance();
+        final var started = FrameHooks.class.getDeclaredField("gameLoopStarted");
+        started.setAccessible(true);
+        final boolean wasStarted = started.getBoolean(null);
+        started.setBoolean(null, false);
+        try {
+            GLStateManager.glUseProgram(program);
+            assertFalse(manager.isActive());
+            FrameHooks.bootstrapFirstFrame();
+            assertEquals(0, GLStateManager.getActiveProgram(), "loading shader must not reach the main menu");
+            assertTrue(manager.isActive());
+            manager.preDraw();
+            GLStateManager.glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
+            GLStateManager.glClear(GL11.GL_COLOR_BUFFER_BIT);
+            GLStateManager.glDrawArrays(GL11.GL_TRIANGLES, 0, 3);
+            final ByteBuffer pixel = BufferUtils.createByteBuffer(4);
+            GL11.glReadPixels(400, 200, 1, 1, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, pixel);
+            for (int channel = 0; channel < 3; channel++) {
+                assertEquals(expected[channel], (pixel.get(channel) & 0xFF) / 255.0f, 2.0f / 255.0f);
+            }
+
+            GLStateManager.glUseProgram(program);
+            FrameHooks.bootstrapFirstFrame();
+            assertEquals(program, GLStateManager.getActiveProgram(), "later frames must preserve external shaders");
+            assertFalse(manager.isActive());
+            assertEquals(GL11.GL_NO_ERROR, GL11.glGetError());
+        } finally {
+            GLStateManager.glUseProgram(0);
+            FrameHooks.frameEnd();
+            started.setBoolean(null, wasStarted);
+        }
+    }
+
+    /** Verifies splash context handoff restores the FFP uniform binding even when its bytes stay unchanged. */
+    @Test
+    void unchangedUniformsDrawAfterContextBindingLoss() {
+        final float[] expected = drawAndReadCenter();
+        final int uniformBuffer = GL30.glGetInteger(GL31.GL_UNIFORM_BUFFER_BINDING, FFPUniformBlock.BINDING_POINT);
+        assertNotEquals(0, uniformBuffer, "the reference draw must have a bound FFP block");
+
+        GL30.glBindBufferBase(GL31.GL_UNIFORM_BUFFER, FFPUniformBlock.BINDING_POINT, 0);
+        GLStateManager.replayStateToBackend();
+        ShaderManager.getInstance().preDraw();
+        assertEquals(uniformBuffer,
+            GL30.glGetInteger(GL31.GL_UNIFORM_BUFFER_BINDING, FFPUniformBlock.BINDING_POINT),
+            "state replay must restore the unchanged FFP uniform block after a context handoff");
+
+        GLStateManager.glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
+        GLStateManager.glClear(GL11.GL_COLOR_BUFFER_BIT);
+        GLStateManager.glDrawArrays(GL11.GL_TRIANGLES, 0, 3);
+        final ByteBuffer pixel = BufferUtils.createByteBuffer(4);
+        GL11.glReadPixels(400, 200, 1, 1, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, pixel);
+        for (int channel = 0; channel < 3; channel++) {
+            assertEquals(expected[channel], (pixel.get(channel) & 0xFF) / 255.0f, 2.0f / 255.0f,
+                "uniform binding loss must not leave a white framebuffer, channel " + channel);
+        }
+        assertEquals(GL11.GL_NO_ERROR, GL11.glGetError(), "restored FFP draw must not raise a GL error");
+    }
+
+    /** Verifies returning from an external shader restores the FFP block without requiring state changes. */
+    @Test
+    void unchangedUniformsDrawAfterExternalShader() {
+        drawAndReadCenter();
+        final int uniformBuffer = GL30.glGetInteger(GL31.GL_UNIFORM_BUFFER_BINDING, FFPUniformBlock.BINDING_POINT);
+        final int program = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
+        GLStateManager.glUseProgram(program);
+        GL30.glBindBufferBase(GL31.GL_UNIFORM_BUFFER, FFPUniformBlock.BINDING_POINT, 0);
+        GLStateManager.glUseProgram(0);
+        ShaderManager.getInstance().preDraw();
+        assertEquals(uniformBuffer,
+            GL30.glGetInteger(GL31.GL_UNIFORM_BUFFER_BINDING, FFPUniformBlock.BINDING_POINT),
+            "an external shader must not leave FFP with a missing uniform block");
+        assertEquals(GL11.GL_NO_ERROR, GL11.glGetError());
     }
 
     @Test

@@ -1,11 +1,13 @@
 package com.gtnewhorizons.angelica.glsm.ffp;
 
 import com.gtnewhorizons.angelica.glsm.GLCoreTest;
+import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import it.unimi.dsi.fastutil.objects.Object2IntMap;
 import org.junit.jupiter.api.Test;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL20;
+import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GL31;
 
 import java.nio.FloatBuffer;
@@ -18,6 +20,34 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @GLCoreTest
 class FFPUniformBlockLayoutGLTest {
+
+    /** Keeps content-based upload skipping and reuses the exact buffer range after binding invalidation. */
+    @Test
+    void unchangedUniformDataIsNotRewrittenAfterRebind() {
+        final Uniforms uniforms = new Uniforms();
+        try {
+            uniforms.upload(GLStateManager.ctx());
+            final int buffer = uniforms.getRing().getBufferId();
+            final int offset = GL30.glGetInteger(GL31.GL_UNIFORM_BUFFER_START, FFPUniformBlock.BINDING_POINT);
+            final int writes = uniforms.blockWrites;
+            assertEquals(1, writes, "initial state requires one upload");
+
+            GLStateManager.ctx().colorGeneration++;
+            uniforms.upload(GLStateManager.ctx());
+            assertEquals(writes, uniforms.blockWrites, "unchanged bytes must retain the upstream skip optimization");
+
+            GL30.glBindBufferBase(GL31.GL_UNIFORM_BUFFER, FFPUniformBlock.BINDING_POINT, 0);
+            uniforms.invalidateBinding();
+            uniforms.upload(GLStateManager.ctx());
+            assertEquals(buffer, GL30.glGetInteger(GL31.GL_UNIFORM_BUFFER_BINDING, FFPUniformBlock.BINDING_POINT));
+            assertEquals(offset, GL30.glGetInteger(GL31.GL_UNIFORM_BUFFER_START, FFPUniformBlock.BINDING_POINT));
+            assertEquals(writes, uniforms.blockWrites, "rebind must not copy data or allocate another ring range");
+            assertEquals(2, uniforms.blockSkips);
+            assertEquals(GL11.GL_NO_ERROR, GL11.glGetError());
+        } finally {
+            uniforms.destroy();
+        }
+    }
 
     /** Checks that the shared FFP block still matches the driver layout. */
     @Test

@@ -5,6 +5,7 @@ import com.gtnewhorizons.angelica.glsm.DisplayListManager;
 import com.gtnewhorizons.angelica.glsm.GLDebug;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.backend.BackendManager;
+import com.gtnewhorizons.angelica.glsm.ffp.ShaderManager;
 
 import static com.gtnewhorizons.angelica.glsm.backend.BackendManager.RENDER_BACKEND;
 
@@ -16,11 +17,15 @@ public final class FrameHooks {
     private static long frameCounter;
     private static boolean frameGroupActive;
 
+    /** Starts the game frame with FFP restored after loading shaders, without resetting later frame programs. */
     public static void bootstrapFirstFrame() {
         DisplayListManager.abortIfLeaked();
         if (!gameLoopStarted) {
             gameLoopStarted = true;
             RENDER_BACKEND.onFrameBegin();
+            if (ShaderManager.getInstance().isEnabled()) {
+                GLStateManager.glUseProgram(0);
+            }
             pushFrameGroup();
         }
     }

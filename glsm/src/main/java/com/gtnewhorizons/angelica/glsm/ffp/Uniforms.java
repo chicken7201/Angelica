@@ -41,6 +41,7 @@ public class Uniforms {
     private final long stagingAddress = memAddress0(staging);
     private UniformRingBuffer ring;
     private boolean bound;
+    private int boundOffset = -1;
     private boolean contentChanged;
 
     private int mvGen = -1, mvLinearGen = -1, projGen = -1, texMatGen = -1;
@@ -83,6 +84,7 @@ public class Uniforms {
     private static final double LN2 = java.lang.Math.log(2.0);
     private static final double SQRT_LN2 = java.lang.Math.sqrt(LN2);
 
+    /** Updates changed uniform bytes and restores a lost binding without rewriting unchanged data. */
     public void upload(GLContextState glCtx) {
         boolean dirty = false;
         contentChanged = false;
@@ -202,7 +204,8 @@ public class Uniforms {
         }
 
         if (dirty || !bound) {
-            if (!contentChanged && bound) {
+            if (!contentChanged && boundOffset >= 0) {
+                if (!bound) bindBlock(boundOffset);
                 blockSkips++;
                 return;
             }
@@ -210,11 +213,22 @@ public class Uniforms {
                 ring = new UniformRingBuffer(RING_CAPACITY, FFPUniformBlock.SIZE);
             }
             final int offset = ring.writeBlock(staging);
-            GLStateManager.glBindBufferRange(GL31.GL_UNIFORM_BUFFER, FFPUniformBlock.BINDING_POINT,
-                ring.getBufferId(), offset, FFPUniformBlock.SIZE);
-            bound = true;
+            bindBlock(offset);
             blockWrites++;
         }
+    }
+
+    /** Marks only the indexed GL binding as lost after context replay or an external shader draw. */
+    public void invalidateBinding() {
+        bound = false;
+    }
+
+    /** Binds the last valid ring range, retaining its bytes and offset for an inexpensive later restore. */
+    private void bindBlock(int offset) {
+        GLStateManager.glBindBufferRange(GL31.GL_UNIFORM_BUFFER, FFPUniformBlock.BINDING_POINT,
+            ring.getBufferId(), offset, FFPUniformBlock.SIZE);
+        boundOffset = offset;
+        bound = true;
     }
 
     private void stageMatrices(boolean mvChanged, boolean projChanged, GLContextState glCtx) {
@@ -438,6 +452,7 @@ public class Uniforms {
         return staging;
     }
 
+    /** Releases the staging image and ring and forgets any cached range. */
     public void destroy() {
         memFree(staging);
         memFree(clipPlaneBuf);
@@ -446,5 +461,6 @@ public class Uniforms {
             ring = null;
         }
         bound = false;
+        boundOffset = -1;
     }
 }
