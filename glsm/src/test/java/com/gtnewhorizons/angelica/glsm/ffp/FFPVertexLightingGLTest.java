@@ -11,6 +11,7 @@ import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL15;
+import org.lwjgl.opengl.GL20;
 
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
@@ -18,6 +19,7 @@ import java.nio.FloatBuffer;
 import static com.gtnewhorizon.gtnhlib.client.renderer.vertex.VertexFlags.COLOR_BIT;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @GLCoreTest
@@ -174,6 +176,30 @@ class FFPVertexLightingGLTest {
     void faceOnNormalMatchesGeneratedShader() {
         GLStateManager.glNormal3f(0.0f, 0.0f, 1.0f);
         assertSolverMatchesShader("face-on normal");
+    }
+
+    /** Verifies loading-state replay rebinds the same FFP variant and draws over a white framebuffer. */
+    @Test
+    void unchangedVariantDrawsAfterStateReplay() {
+        final float[] expected = drawAndReadCenter();
+        final ShaderManager sm = ShaderManager.getInstance();
+        for (int replay = 0; replay < 3; replay++) {
+            GLStateManager.replayStateToBackend();
+            assertEquals(0, GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM), "replay restores the FFP sentinel");
+            sm.preDraw();
+            assertNotEquals(0, GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM), "unchanged FFP variant must rebind after replay");
+
+            GLStateManager.glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
+            GLStateManager.glClear(GL11.GL_COLOR_BUFFER_BIT);
+            GLStateManager.glDrawArrays(GL11.GL_TRIANGLES, 0, 3);
+            final ByteBuffer pixel = BufferUtils.createByteBuffer(4);
+            GL11.glReadPixels(400, 200, 1, 1, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, pixel);
+            for (int channel = 0; channel < 3; channel++) {
+                assertEquals(expected[channel], (pixel.get(channel) & 0xFF) / 255.0f, 2.0f / 255.0f,
+                    "state replay must preserve drawn pixels, channel " + channel);
+            }
+            assertEquals(GL11.GL_NO_ERROR, GL11.glGetError(), "replayed FFP draw must not raise a GL error");
+        }
     }
 
     @Test

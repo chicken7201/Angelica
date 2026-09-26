@@ -121,6 +121,7 @@ public final class ShaderManager {
         lastBoundProgramId = GLStateManager.getActiveProgram();
     }
 
+    /** Discards the driver binding so state replay cannot reuse an unbound FFP program. */
     public static void invalidateBoundProgram() {
         final ShaderManager sm = Holder.INSTANCE;
         sm.lastBoundProgramId = -1;
@@ -136,6 +137,7 @@ public final class ShaderManager {
         GLStateManager.forceAttribDefaultsDirty();
     }
 
+    /** Selects and binds the FFP program, including an unchanged variant invalidated by state replay. */
     public void preDraw() {
         GLSMHooks.resolvePendingProgram();
         final DeferredBlendHandler bh = GLSMHooks.blendHandler;
@@ -164,7 +166,8 @@ public final class ShaderManager {
         final int fragMask = FragmentKey.unitMaskFromPacked(currentFKScratch, fkLen);
         final long vkPacked = VertexKey.packFromState(hasColor, hasNormal, hasTexCoord, hasLightmap, fragMask, glCtx);
 
-        if (vkPacked != currentVertexKeyPacked || !Arrays.equals(currentFKScratch, 0, fkLen, currentFKPacked, 0, currentFKLen)) {
+        if (currentProgram == null || vkPacked != currentVertexKeyPacked
+            || !Arrays.equals(currentFKScratch, 0, fkLen, currentFKPacked, 0, currentFKLen)) {
             commitVariant(vkPacked, fkLen);
         }
 
