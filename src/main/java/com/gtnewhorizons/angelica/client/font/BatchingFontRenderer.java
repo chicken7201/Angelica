@@ -647,6 +647,18 @@ public class BatchingFontRenderer {
         endBatch();
     }
 
+    /** Clears queued text and shared vertex storage before upstream crash recovery resumes rendering. */
+    public void resetAfterCrash() {
+        discardDeferredText();
+        batchDepth = 0;
+        deferredCmdWatermark = 0;
+        deferredVertexPos = 0;
+        deferredIdxPos = 0;
+        truncateBatchToWatermark();
+        arenaOwner = null;
+        flushLastTexture = null;
+    }
+
     private void deferBatch() {
         sealBatchSegment();
         if (batchSegments.isEmpty()) {
