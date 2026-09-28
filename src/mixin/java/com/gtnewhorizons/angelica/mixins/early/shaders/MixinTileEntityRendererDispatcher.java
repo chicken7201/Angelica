@@ -10,7 +10,6 @@ import net.coderbot.iris.uniforms.CapturedRenderingState;
 import net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher;
 import net.minecraft.tileentity.TileEntity;
 import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -23,7 +22,8 @@ public class MixinTileEntityRendererDispatcher {
         RenderRecovery.throwIfCrashTestArmed();
         TesrBlendScope.enter();
         CTMUtils.clearCurrentCompact();
-        CapturedRenderingState.INSTANCE.setCurrentBlockEntity(iris$resolveBlockEntityId(te));
+        CapturedRenderingState.INSTANCE.pushCurrentBlockEntity();
+        CapturedRenderingState.INSTANCE.setCurrentBlockEntity(te == null ? null : te.getBlockType(), TesrProviderDispatch.blockMetadata(te));
         TesrAttribution.currentRenderable = te != null ? te.getClass() : null;
         PassRebindGate.rebindIfDirty();
     }
@@ -31,13 +31,8 @@ public class MixinTileEntityRendererDispatcher {
     @Inject(method = "renderTileEntityAt(Lnet/minecraft/tileentity/TileEntity;DDDF)V", at = @At("RETURN"))
     private void iris$endBlockEntity(TileEntity te, double x, double y, double z, float partialTicks, CallbackInfo ci) {
         CTMUtils.clearCurrentCompact();
-        CapturedRenderingState.INSTANCE.setCurrentBlockEntity(0);
+        CapturedRenderingState.INSTANCE.popCurrentBlockEntity();
         TesrAttribution.currentRenderable = null;
         TesrBlendScope.exit();
-    }
-
-    @Unique
-    private static int iris$resolveBlockEntityId(TileEntity te) {
-        return TesrProviderDispatch.resolveBlockEntityId(te);
     }
 }

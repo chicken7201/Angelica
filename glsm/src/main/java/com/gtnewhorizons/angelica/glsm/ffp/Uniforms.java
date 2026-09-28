@@ -11,7 +11,6 @@ import com.gtnewhorizons.angelica.glsm.states.TexGenState;
 import com.gtnewhorizons.angelica.glsm.states.TextureUnitArray;
 import com.gtnewhorizons.angelica.glsm.states.ViewportState;
 import com.gtnewhorizons.angelica.glsm.streaming.UniformRingBuffer;
-import com.gtnewhorizons.angelica.glsm.hooks.GLSMConfig;
 import org.joml.Math;
 import org.joml.Matrix3f;
 import org.joml.Matrix4f;
@@ -126,25 +125,26 @@ public class Uniforms {
             stagedColor++;
             dirty = true;
         }
-        final int normG = ShaderManager.getNormalGeneration();
+        final ShaderManager ffp = glCtx.ffp;
+        final int normG = ffp.normalGeneration;
         if (normG != normalGen) {
-            final Vector3f normal = ShaderManager.getCurrentNormal();
+            final Vector3f normal = ffp.currentNormal;
             putVec3(FFPUniformBlock.CURRENT_NORMAL, normal.x, normal.y, normal.z);
             normalGen = normG;
             stagedNormal++;
             dirty = true;
         }
-        final int tcG = ShaderManager.getTexCoordGeneration();
+        final int tcG = ffp.texCoordGeneration;
         if (tcG != texCoordGen) {
-            putVec4(FFPUniformBlock.CURRENT_TEX_COORD_0, ShaderManager.getCurrentTexCoord(0));
-            putVec4(FFPUniformBlock.CURRENT_TEX_COORD_2, ShaderManager.getCurrentTexCoord(2));
-            putVec4(FFPUniformBlock.CURRENT_TEX_COORD_3, ShaderManager.getCurrentTexCoord(3));
+            putVec4(FFPUniformBlock.CURRENT_TEX_COORD_0, ffp.currentTexCoords[0]);
+            putVec4(FFPUniformBlock.CURRENT_TEX_COORD_2, ffp.currentTexCoords[2]);
+            putVec4(FFPUniformBlock.CURRENT_TEX_COORD_3, ffp.currentTexCoords[3]);
             texCoordGen = tcG;
             stagedTexCoord++;
             dirty = true;
         }
-        final float brightX = GLSMConfig.lastBrightnessX;
-        final float brightY = GLSMConfig.lastBrightnessY;
+        final float brightX = glCtx.lastBrightnessX;
+        final float brightY = glCtx.lastBrightnessY;
         if (brightX != lightmapX || brightY != lightmapY) {
             putFloat(FFPUniformBlock.CURRENT_LIGHTMAP_COORD, brightX);
             putFloat(FFPUniformBlock.CURRENT_LIGHTMAP_COORD + 4, brightY);
@@ -216,11 +216,6 @@ public class Uniforms {
             bindBlock(offset);
             blockWrites++;
         }
-    }
-
-    /** Marks only the indexed GL binding as lost after context replay or an external shader draw. */
-    public void invalidateBinding() {
-        bound = false;
     }
 
     /** Binds the last valid ring range, retaining its bytes and offset for an inexpensive later restore. */
@@ -442,6 +437,11 @@ public class Uniforms {
         stagedTexGen = 0;
         stagedClipPlanes = 0;
         stagedMisc = 0;
+    }
+
+    /** Marks the context-local GL binding as lost while preserving the staged bytes. */
+    void invalidateBinding() {
+        bound = false;
     }
 
     UniformRingBuffer getRing() {

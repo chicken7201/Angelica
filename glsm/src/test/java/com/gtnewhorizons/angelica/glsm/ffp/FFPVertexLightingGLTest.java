@@ -74,7 +74,7 @@ class FFPVertexLightingGLTest {
         GLStateManager.glDisable(GL11.GL_COLOR_MATERIAL);
         final ShaderManager sm = ShaderManager.getInstance();
         if (sm.isActive()) sm.deactivate();
-        sm.disable();
+        ShaderManager.disable();
         GLStateManager.glBindVertexArray(0);
         if (vbo != 0) {
             GLStateManager.glDeleteBuffers(vbo);
@@ -153,7 +153,7 @@ class FFPVertexLightingGLTest {
     private float[] drawAndReadCenter() {
         buildTriangle();
         final ShaderManager sm = ShaderManager.getInstance();
-        sm.enable();
+        ShaderManager.enable();
         sm.activate();
 
         GLStateManager.glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
@@ -189,7 +189,7 @@ class FFPVertexLightingGLTest {
         for (int replay = 0; replay < 3; replay++) {
             GLStateManager.replayStateToBackend();
             assertEquals(0, GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM), "replay restores the FFP sentinel");
-            sm.preDraw();
+            sm.preDraw(GLStateManager.ctx());
             assertNotEquals(0, GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM), "unchanged FFP variant must rebind after replay");
 
             GLStateManager.glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
@@ -221,7 +221,7 @@ class FFPVertexLightingGLTest {
             FrameHooks.bootstrapFirstFrame();
             assertEquals(0, GLStateManager.getActiveProgram(), "loading shader must not reach the main menu");
             assertTrue(manager.isActive());
-            manager.preDraw();
+            manager.preDraw(GLStateManager.ctx());
             GLStateManager.glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
             GLStateManager.glClear(GL11.GL_COLOR_BUFFER_BIT);
             GLStateManager.glDrawArrays(GL11.GL_TRIANGLES, 0, 3);
@@ -252,7 +252,7 @@ class FFPVertexLightingGLTest {
 
         GL30.glBindBufferBase(GL31.GL_UNIFORM_BUFFER, FFPUniformBlock.BINDING_POINT, 0);
         GLStateManager.replayStateToBackend();
-        ShaderManager.getInstance().preDraw();
+        ShaderManager.getInstance().preDraw(GLStateManager.ctx());
         assertEquals(uniformBuffer,
             GL30.glGetInteger(GL31.GL_UNIFORM_BUFFER_BINDING, FFPUniformBlock.BINDING_POINT),
             "state replay must restore the unchanged FFP uniform block after a context handoff");
@@ -278,7 +278,7 @@ class FFPVertexLightingGLTest {
         GLStateManager.glUseProgram(program);
         GL30.glBindBufferBase(GL31.GL_UNIFORM_BUFFER, FFPUniformBlock.BINDING_POINT, 0);
         GLStateManager.glUseProgram(0);
-        ShaderManager.getInstance().preDraw();
+        ShaderManager.getInstance().preDraw(GLStateManager.ctx());
         assertEquals(uniformBuffer,
             GL30.glGetInteger(GL31.GL_UNIFORM_BUFFER_BINDING, FFPUniformBlock.BINDING_POINT),
             "an external shader must not leave FFP with a missing uniform block");

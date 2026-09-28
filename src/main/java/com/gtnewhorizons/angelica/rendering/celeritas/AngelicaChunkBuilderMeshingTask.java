@@ -304,7 +304,7 @@ public abstract class AngelicaChunkBuilderMeshingTask extends ChunkBuilderTask<C
             final Reference2ReferenceMap<TerrainRenderPass, BuiltSectionMeshParts> meshes;
             try {
                 meshes = BuiltSectionMeshParts.groupFromBuildBuffers(buffers,
-                    (float) camera.x - minX, (float) camera.y - minY, (float) camera.z - minZ);
+                    (float) (camera.x - minX), (float) (camera.y - minY), (float) (camera.z - minZ));
             } finally {
                 if (Tracy.ENABLED) Tracy.endZone();
             }
@@ -405,7 +405,7 @@ public abstract class AngelicaChunkBuilderMeshingTask extends ChunkBuilderTask<C
             if (Tracy.ENABLED) Tracy.beginZone(Z_MESH_FINALIZE);
             final Reference2ReferenceMap<TerrainRenderPass, BuiltSectionMeshParts> meshes;
             try {
-                meshes = BuiltSectionMeshParts.groupFromBuildBuffers(m.buffers, (float) camera.x - minX, (float) camera.y - minY, (float) camera.z - minZ);
+                meshes = BuiltSectionMeshParts.groupFromBuildBuffers(m.buffers, (float) (camera.x - minX), (float) (camera.y - minY), (float) (camera.z - minZ));
             } finally {
                 if (Tracy.ENABLED) Tracy.endZone();
             }
