@@ -11,6 +11,7 @@ import java.util.Set;
 
 public class CommonTransformer {
 
+	/** Replaces compatibility inputs and preserves matching built-in interfaces between shader stages. */
 	public static void transform(Transformer root, Parameters parameters, boolean core, int glslVersion) {
 		root.rename("gl_FogFragCoord", "iris_FogFragCoord");
 		if (parameters.type == ShaderType.VERTEX) {
@@ -123,6 +124,12 @@ public class CommonTransformer {
 			});
 		}
 
+		if (parameters.patch == Patch.ATTRIBUTES && parameters.type == ShaderType.GEOMETRY
+			&& !hasPerVertexInput(root)) {
+			// The vertex patch writes eight distances; an unsized geometry input can link as a different type on NVIDIA.
+			root.injectVariable("in gl_PerVertex { vec4 gl_Position; float gl_PointSize; float gl_ClipDistance[8]; } gl_in[];");
+		}
+
 		if (parameters.patch == Patch.ATTRIBUTES && parameters.type == ShaderType.VERTEX) {
 			root.injectVariable("uniform bool angelica_ClipPlanesEnabled;");
 			root.injectVariable("uniform vec4 angelica_ClipPlane[8];");
@@ -143,5 +150,16 @@ public class CommonTransformer {
 				+ "gl_ClipDistance[6] = 0.0; gl_ClipDistance[7] = 0.0; } }"
 			);
 		}
+	}
+
+	/** Detects an existing built-in input block without treating its block name as a variable. */
+	private static boolean hasPerVertexInput(Transformer root) {
+		final boolean[] declared = { false };
+		root.mutateTree(tree -> {
+			if (tree.children != null) {
+				declared[0] = tree.children.stream().anyMatch(child -> child.getText().contains("ingl_PerVertex{"));
+			}
+		});
+		return declared[0];
 	}
 }

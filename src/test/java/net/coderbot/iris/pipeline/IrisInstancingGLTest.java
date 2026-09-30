@@ -321,6 +321,16 @@ class IrisInstancingGLTest {
         link("templateVariant", result);
     }
 
+    /** Keeps a shader pack's explicitly sized geometry input usable after attribute patching. */
+    @Test
+    void templateVariantPreservesAnExplicitGeometryInputBlock() {
+        final String geometry = TEMPLATE_GEOMETRY.replace("layout(triangles) in;",
+            "layout(triangles) in; in gl_PerVertex { vec4 gl_Position; float gl_PointSize; float gl_ClipDistance[8]; } gl_in[];");
+        final Map<PatchShaderType, String> result = TransformPatcher.patchAttributesInstanced(
+            TEMPLATE_VERTEX, geometry, null, null, TEMPLATE_FRAGMENT, TEX_LM, false, Instancing.TEMPLATE);
+        link("explicitGeometryInput", result);
+    }
+
     private static void link(String name, Map<PatchShaderType, String> result) {
         GLStateManager.glDeleteProgram(linkProgram(name, result));
     }

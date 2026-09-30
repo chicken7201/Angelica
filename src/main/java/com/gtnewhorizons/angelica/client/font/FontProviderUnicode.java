@@ -3,6 +3,7 @@ package com.gtnewhorizons.angelica.client.font;
 import com.gtnewhorizons.angelica.config.FontConfig;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.backend.BackendManager;
+import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import jss.util.RandomXoshiro256StarStar;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.DynamicTexture;
@@ -36,6 +37,7 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
     private final Object pageStateLock = new Object();
     private final Object[] pageCreationLocks = new Object[PAGE_COUNT];
     private final LoadedPage[] unicodePages = new LoadedPage[PAGE_COUNT];
+    private final Object2ObjectOpenHashMap<ResourceLocation, LoadedPage> texturePages = new Object2ObjectOpenHashMap<>();
     private final List<LoadedPage> retiredPages = new ArrayList<>();
     private final int[] pageCreationCounts = new int[PAGE_COUNT];
     private final RandomXoshiro256StarStar fontRandom = new RandomXoshiro256StarStar();
@@ -82,6 +84,7 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
                 this.resourceGeneration++;
                 this.resourceManager = resourceManager;
                 this.glyphWidth = loadedGlyphWidth;
+                this.texturePages.clear();
 
                 int count = 0;
                 for (int i = 0; i < this.unicodePages.length; i++) {
@@ -397,7 +400,11 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
                 uploadMissing);
         }
 
-        return textureManager.getTexture(page.texture) == page.dynamicTexture ? page.texture : null;
+        if (textureManager.getTexture(page.texture) != page.dynamicTexture) {
+            return null;
+        }
+        this.texturePages.put(page.texture, page);
+        return page.texture;
     }
 
     /** Keeps a lazy Unicode page upload from replacing the texture bound by the caller before font state is saved. */
@@ -495,7 +502,8 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
                 page.metrics.getSampleUEnd(chr & 255),
                 page.metrics.getSampleVStart(chr & 255),
                 page.metrics.getSampleVEnd(chr & 255),
-                texture);
+                texture,
+                texture == null ? 0 : page.dynamicTexture.glTextureId);
         }
         return null;
     }
@@ -511,15 +519,12 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
             synchronized (this.pageStateLock) {
                 final TextureManager textureManager = Minecraft.getMinecraft().getTextureManager();
                 clearRetiredPages(textureManager);
-                for (LoadedPage page : this.unicodePages) {
-                    if (page != null && page.generation == this.resourceGeneration && location.equals(page.texture)) {
-                        if (ensurePageTextureLocked(page, textureManager) == null || page.dynamicTexture == null) {
-                            return -1;
-                        }
-                        return page.dynamicTexture.glTextureId;
-                    }
+                final LoadedPage page = this.texturePages.get(location);
+                if (page == null || !isCurrentPageLocked(page)
+                    || ensurePageTextureLocked(page, textureManager) == null || page.dynamicTexture == null) {
+                    return -1;
                 }
-                return -1;
+                return page.dynamicTexture.glTextureId;
             }
         } finally {
             if (locked) GLStateManager.releaseDrawLock();
@@ -686,27 +691,11 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
         return FontConfig.fontShadowOffset * FontConfig.fontShadowOffsetUC;
     }
 
-    /** Returns the registered texture for a current page, or null while upload must be deferred. */
+    /** Returns the upstream texture ID while preserving composed-page and reload validation. */
     @Override
-    public ResourceLocation getTexture(char chr) {
-        if (Character.isSurrogate(chr)) {
-            return null;
-        }
-
-        for (int attempt = 0; attempt < 2; attempt++) {
-            final LoadedPage page = getPage(chr);
-            if (page.metrics == null) {
-                if (isCurrentPage(page)) {
-                    return null;
-                }
-                continue;
-            }
-            final ResourceLocation texture = ensurePageTexture(page);
-            if (texture != null || isCurrentPage(page)) {
-                return texture;
-            }
-        }
-        return null;
+    public int getTexture(char chr) {
+        final GlyphRenderInfo glyph = getRenderInfo(chr);
+        return glyph == null ? 0 : glyph.textureId;
     }
 
     /** Keeps Unicode glyphs at the renderer's standard vertical scale. */
@@ -728,11 +717,12 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
         final float sampleVStart;
         final float sampleVEnd;
         final ResourceLocation texture;
+        final int textureId;
 
         /** Captures all bounds, UVs, advance, and texture state used to build one glyph quad. */
         private GlyphRenderInfo(float uStart, float vStart, float xAdvance, float glyphWidth, float uSize,
             float vSize, float sampleUStart, float sampleUEnd, float sampleVStart, float sampleVEnd,
-            ResourceLocation texture) {
+            ResourceLocation texture, int textureId) {
             this.uStart = uStart;
             this.vStart = vStart;
             this.xAdvance = xAdvance;
@@ -744,6 +734,7 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
             this.sampleVStart = sampleVStart;
             this.sampleVEnd = sampleVEnd;
             this.texture = texture;
+            this.textureId = textureId;
         }
     }
 

@@ -68,7 +68,7 @@ class FontProviderUnicodeTest {
         assertFalse(provider.isGlyphAvailable(highSurrogate));
         assertFalse(provider.isGlyphAvailable(lowSurrogate));
         assertNull(provider.getRenderInfo(highSurrogate));
-        assertNull(provider.getTexture(lowSurrogate));
+        assertEquals(0, provider.getTexture(lowSurrogate));
         assertEquals(0.0F, provider.getXAdvance(highSurrogate));
         assertEquals(0.0F, provider.getUSize(lowSurrogate));
         verifyNoInteractions(manager);
@@ -88,7 +88,7 @@ class FontProviderUnicodeTest {
         assertFalse(provider.isGlyphAvailable(chr));
         assertFalse(provider.isGlyphAvailable(chr));
         assertNull(provider.getRenderInfo(chr));
-        assertNull(provider.getTexture(chr));
+        assertEquals(0, provider.getTexture(chr));
         verify(manager).getAllResources(location);
     }
 

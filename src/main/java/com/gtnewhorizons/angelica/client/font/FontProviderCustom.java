@@ -1,35 +1,37 @@
 package com.gtnewhorizons.angelica.client.font;
 
+import static com.gtnewhorizon.gtnhlib.bytebuf.MemoryUtilities.memAddress0;
+import static com.gtnewhorizon.gtnhlib.bytebuf.MemoryUtilities.memAllocInt;
+import static com.gtnewhorizon.gtnhlib.bytebuf.MemoryUtilities.memFree;
+import static com.gtnewhorizon.gtnhlib.bytebuf.MemoryUtilities.memPutInt;
+
 import com.gtnewhorizons.angelica.config.FontConfig;
+import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import jss.util.RandomXoshiro256StarStar;
 import lombok.Setter;
 import lombok.Value;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.texture.ITextureObject;
-import net.minecraft.client.renderer.texture.TextureManager;
-import net.minecraft.client.renderer.texture.TextureUtil;
-import net.minecraft.util.ResourceLocation;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL12;
 
-import javax.imageio.ImageIO;
 import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.font.FontRenderContext;
 import java.awt.image.BufferedImage;
-import java.io.File;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Paths;
-import java.util.Map;
+import java.awt.image.ColorModel;
+import java.awt.image.DataBufferInt;
+import java.awt.image.Raster;
+import java.nio.IntBuffer;
 import java.util.Objects;
+
+import static com.gtnewhorizons.angelica.client.font.FontStrategist.getFontName;
 
 public final class FontProviderCustom implements FontProvider {
 
     public static final Logger LOGGER = LogManager.getLogger("Angelica");
-    public static final String FONT_DIR = "fonts/custom/";
     static final int ATLAS_SIZE = 128;
     static final int ATLAS_COUNT = 512;
     private final byte id; // 0 - primary font, 1 - fallback font
@@ -53,7 +55,7 @@ public final class FontProviderCustom implements FontProvider {
         }
         int fontPos = -1;
         for (int i = 0; i < availableFonts.length; i++) {
-            if (Objects.equals(myFontName, availableFonts[i].getFontName())) {
+            if (Objects.equals(myFontName, getFontName(availableFonts[i]))) {
                 fontPos = i;
                 break;
             }
@@ -76,43 +78,13 @@ public final class FontProviderCustom implements FontProvider {
         this.currentFontQuality = FontConfig.customFontQuality;
         this.font = FontStrategist.getAvailableFonts()[fontID].deriveFont(this.currentFontQuality);
 
-        File[] files = new File(getFontDir()).listFiles();
-        if (files != null) {
-            for (File f : files) {
-                if (!Files.isSymbolicLink(f.toPath())) {
-                    f.delete();
-                }
-            }
-        }
-
-        TextureManager tm = Minecraft.getMinecraft().getTextureManager();
-        Map mapTextureObjects = tm.mapTextureObjects;
-        for (int i = 0; i < ATLAS_COUNT; i++) {
-            ResourceLocation key = new ResourceLocation(getAtlasResourceName(i));
-            if (mapTextureObjects.containsKey(key)) {
-                ITextureObject obj = (ITextureObject) mapTextureObjects.get(key);
-                TextureUtil.deleteTexture(obj.getGlTextureId());
-                mapTextureObjects.remove(key);
+        for (FontAtlas atlas : fontAtlases) {
+            if (atlas != null && atlas.texture != 0) {
+                GLStateManager.glDeleteTextures(atlas.texture);
             }
         }
 
         this.fontAtlases = new FontAtlas[ATLAS_COUNT];
-    }
-
-    private String getFontDir() {
-        return FONT_DIR + "f" + this.id + "/";
-    }
-
-    private String getAtlasFilename(int atlasId) {
-        return "f" + this.id + "p" + atlasId;
-    }
-
-    String getAtlasResourceName(int atlasId) {
-        return "minecraft:angelica_c" + getAtlasFilename(atlasId);
-    }
-
-    String getAtlasFullPath(int atlasId) {
-        return getFontDir() + getAtlasFilename(atlasId) + ".png";
     }
 
     @Value
@@ -139,11 +111,11 @@ public final class FontProviderCustom implements FontProvider {
         final float drawHeight;
         final float uSize;
         final float vSize;
-        final ResourceLocation texture;
+        final int texture;
 
         /** Captures one custom glyph's atlas UV, baseline-relative quad, and independent pen advance. */
         private GlyphRenderInfo(float uStart, float vStart, float xAdvance, float drawOffsetX, float drawOffsetY,
-            float drawWidth, float drawHeight, float uSize, float vSize, ResourceLocation texture) {
+            float drawWidth, float drawHeight, float uSize, float vSize, int texture) {
             this.uStart = uStart;
             this.vStart = vStart;
             this.xAdvance = xAdvance;
@@ -158,9 +130,8 @@ public final class FontProviderCustom implements FontProvider {
     }
 
     private class FontAtlas {
-
         GlyphData[] glyphData = new GlyphData[ATLAS_SIZE];
-        private ResourceLocation texture;
+        private int texture;
         private final int id;
 
         FontAtlas(int id) {
@@ -260,14 +231,56 @@ public final class FontProviderCustom implements FontProvider {
                 tileX++;
             }
             g2d.dispose();
-            try {
-                Files.createDirectories(Paths.get(getFontDir()));
-                ImageIO.write(image, "png", new File(getAtlasFullPath(this.id)));
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-            this.texture = new ResourceLocation(getAtlasResourceName(this.id));
+
+            this.texture = uploadAtlas(image);
         }
+    }
+
+    /** Uploads the upstream in-memory atlas while preserving the caller texture binding and releasing staging memory. */
+    static int uploadAtlas(BufferedImage image) {
+        return FontProviderUnicode.withPageTextureBindingPreserved(() -> {
+            int id = GLStateManager.glGenTextures();
+            GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, id);
+            GLStateManager.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+            GLStateManager.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+            GLStateManager.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL11.GL_REPEAT);
+            GLStateManager.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL11.GL_REPEAT);
+
+            final int width = image.getWidth();
+            final int height = image.getHeight();
+            final IntBuffer pixelBuffer = memAllocInt(width * height);
+            try {
+                long ptr = memAddress0(pixelBuffer);
+
+                if (image.getRaster().getDataBuffer() instanceof DataBufferInt dataBufferInt) {
+                    final int[] pixelValues = dataBufferInt.getData();
+
+                    for (int i : pixelValues) {
+                        memPutInt(ptr, i);
+                        ptr += 4;
+                    }
+
+                    pixelBuffer.limit(pixelValues.length);
+                } else {
+                    Raster raster = image.getRaster();
+                    ColorModel colorModel = image.getColorModel();
+
+                    for (int y = 0; y < height; y++) {
+                        for (int x = 0; x < width; x++) {
+                            Object pixel = raster.getDataElements(x, y, null);
+                            memPutInt(ptr, colorModel.getRGB(pixel));
+                            ptr += 4;
+                        }
+                    }
+                    pixelBuffer.limit(image.getHeight() * image.getWidth());
+                }
+
+                GLStateManager.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGBA, image.getWidth(), image.getHeight(), 0, GL12.GL_BGRA, GL12.GL_UNSIGNED_INT_8_8_8_8_REV, pixelBuffer);
+                return id;
+            } finally {
+                memFree(pixelBuffer);
+            }
+        });
     }
 
     /** Applies identical Java2D rasterization hints during metric extraction and final atlas drawing. */
@@ -387,8 +400,9 @@ public final class FontProviderCustom implements FontProvider {
         return FontConfig.fontShadowOffset;
     }
 
+    /** Returns the directly bindable ID of the glyphfix atlas containing this character. */
     @Override
-    public ResourceLocation getTexture(char chr) {
+    public int getTexture(char chr) {
         return getAtlas(chr).texture;
     }
 

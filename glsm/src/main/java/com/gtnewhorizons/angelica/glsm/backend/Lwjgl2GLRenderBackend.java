@@ -8,6 +8,7 @@ import org.lwjgl.opengl.ARBClearTexture;
 import org.lwjgl.opengl.ARBDebugOutput;
 import org.lwjgl.opengl.ARBDebugOutputCallback;
 import org.lwjgl.opengl.ARBDirectStateAccess;
+import org.lwjgl.opengl.ARBDrawBuffersBlend;
 import org.lwjgl.opengl.ARBTimerQuery;
 import org.lwjgl.opengl.ContextCapabilities;
 import org.lwjgl.opengl.DisplayMode;
@@ -166,9 +167,14 @@ public final class Lwjgl2GLRenderBackend extends RenderBackend {
         GL30.glDisablei(cap, index);
     }
 
+    /** Uses the advertised ARB entry point when indexed blending is available on a GL 3.3 context. */
     @Override
     public void blendFuncSeparatei(int buf, int srcRGB, int dstRGB, int srcAlpha, int dstAlpha) {
-        GL40.glBlendFuncSeparatei(buf, srcRGB, dstRGB, srcAlpha, dstAlpha);
+        if (caps.OpenGL40) {
+            GL40.glBlendFuncSeparatei(buf, srcRGB, dstRGB, srcAlpha, dstAlpha);
+        } else {
+            ARBDrawBuffersBlend.glBlendFuncSeparateiARB(buf, srcRGB, dstRGB, srcAlpha, dstAlpha);
+        }
     }
 
     @Override
