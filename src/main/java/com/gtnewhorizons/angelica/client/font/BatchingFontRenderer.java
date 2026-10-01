@@ -1275,6 +1275,36 @@ public class BatchingFontRenderer {
         lightmapPackedLight = -1;
     }
 
+    public static boolean darkModeRecolorEnabled = false;
+    /** Enters a GUI recolor scope and returns the previous flag. */
+    public static boolean enterRecolorSection(boolean enable) {
+        boolean prev = darkModeRecolorEnabled;
+        darkModeRecolorEnabled = enable;
+        return prev;
+    }
+    /** Restores the enclosing GUI recolor scope. */
+    public static void exitRecolorSection(boolean prev) {
+        darkModeRecolorEnabled = prev;
+    }
+
+    // Inside a button section, text drawn in one of the button's own three colors is swapped for button_font's color.
+    // Button sections can't be nested: only the on/off flag is restored on exit, not the colors.
+    private static boolean buttonSectionActive = false;
+    private static int buttonEnabledColor, buttonHoveredColor, buttonDisabledColor;
+    /** Records the button's text colors for resource-pack recoloring. */
+    public static boolean enterButtonSection(int enabledColor, int hoveredColor, int disabledColor) {
+        boolean prev = buttonSectionActive;
+        buttonSectionActive = true;
+        buttonEnabledColor = enabledColor;
+        buttonHoveredColor = hoveredColor;
+        buttonDisabledColor = disabledColor;
+        return prev;
+    }
+    /** Restores the enclosing button scope. */
+    public static void exitButtonSection(boolean prev) {
+        buttonSectionActive = prev;
+    }
+
     // === Actual text mesh generation
 
     public static boolean charInRange(char what, char fromInclusive, char toInclusive) {
@@ -1358,12 +1388,16 @@ public class BatchingFontRenderer {
     private static final double WAVE_TIME_SCALE = 5e-9;
     private static final float WAVE_FREQUENCY = 0.5f;
 
-    public float drawString(final float anchorX, final float anchorY, final int color, final boolean enableShadow,
+    /** Builds recolored glyph meshes while preserving glyph bearings and advances. */
+    public float drawString(final float anchorX, final float anchorY, final int inputColor, final boolean enableShadow,
                             final boolean unicodeFlag, final CharSequence string, int stringOffset, int stringLength) {
         // noinspection SizeReplaceableByIsEmpty
         if (string == null || string.length() == 0) {
             return anchorX + (enableShadow ? 1.0f : 0.0f);
         }
+        final int color = buttonSectionActive
+            ? DarkModeUtils.recolorButtonText(inputColor, buttonEnabledColor, buttonHoveredColor, buttonDisabledColor)
+            : inputColor;
         final int shadowColor = (color & 0xfcfcfc) >> 2 | color & 0xff000000;
 
         FontProviderMC.get(this.isSGA).charWidth = this.charWidth;
@@ -1460,6 +1494,9 @@ public class BatchingFontRenderer {
                             curColor = (curColor & 0xFF000000) | (rgb & 0x00FFFFFF);
                             curShadowColor = (curShadowColor & 0xFF000000) | ((rgb & 0xFCFCFC) >> 2);
                             charIdx += SECTION_X_PAYLOAD;
+                            if (darkModeRecolorEnabled) {
+                                curShadow = false;
+                            }
                         }
                     } else {
                         final boolean is09 = charInRange(fmtCode, '0', '9');
@@ -1480,6 +1517,9 @@ public class BatchingFontRenderer {
                             curColor = (curColor & 0xFF000000) | (rgb & 0x00FFFFFF);
                             final int shadowRgb = this.colorCode[colorIdx + 16];
                             curShadowColor = (curShadowColor & 0xFF000000) | (shadowRgb & 0x00FFFFFF);
+                            if (darkModeRecolorEnabled) {
+                                curShadow = false;
+                            }
                         } else if (fmtCode == 'k') {
                             curRandom = true;
                         } else if (fmtCode == 'l') {
@@ -1686,6 +1726,15 @@ public class BatchingFontRenderer {
                     renderY += (float) Math.sin(visibleCharIndex * WAVE_FREQUENCY + time) * AngelicaConfig.waveAmplitude;
                 }
 
+                if (darkModeRecolorEnabled) {
+                    long recolor = DarkModeUtils.computeGuiFontRecolor(curColor);
+                    if (recolor != DarkModeUtils.NO_RECOLOR) {
+                        curColor = DarkModeUtils.unpackColor(recolor);
+                        curShadowColor = (curShadowColor & 0xFF000000) | DarkModeUtils.unpackShadowRgb(recolor);
+                        curShadow = DarkModeUtils.unpackShadow(recolor);
+                    }
+                }
+
                 float renderX = drawX;
                 int glyphColor = curColor;
                 int glyphShadowColor = curShadowColor;
@@ -1714,7 +1763,7 @@ public class BatchingFontRenderer {
                 // After the background, so this command covers only what is counted below.
                 final int idxId = idxWriterIndex;
 
-                final boolean drawShadow = enableShadow || curShadow;
+                final boolean drawShadow = enableShadow || curShadow || (darkModeRecolorEnabled && DarkModeUtils.shadowsGlobal());
                 if (drawShadow) {
                     final int effectiveShadowColor = curShadowCustomColor
                         ? ((glyphColor & 0xFF000000) | (curShadowColorOverride & 0x00FFFFFF))
