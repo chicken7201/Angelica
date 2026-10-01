@@ -379,7 +379,10 @@ public class CompatShaderTransformer {
         }
         if (ffp.uv1()) {
             transformer.injectVariable("layout(location = 3) in vec4 angelica_MultiTexCoord1;");
-            transformer.rename("gl_MultiTexCoord1", "angelica_MultiTexCoord1");
+            transformer.injectVariable("uniform vec2 angelica_CurrentLightmapCoord;");
+            transformer.replaceExpression("gl_MultiTexCoord1",
+                "((angelica_MultiTexCoord1.x == -1.0 || angelica_MultiTexCoord1.x == 65535.0)"
+                    + " ? vec4(angelica_CurrentLightmapCoord, 0.0, 1.0) : angelica_MultiTexCoord1)");
         }
         if (ffp.normal()) {
             transformer.injectVariable("layout(location = 4) in vec3 angelica_Normal;");

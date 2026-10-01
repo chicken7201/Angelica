@@ -18,6 +18,7 @@ import java.util.Map;
  * transformation methods.
  */
 class AttributeTransformer {
+	/** Patches vertex inputs while keeping cached inventory light responsive to each draw. */
 	public static void transform(Transformer transformer, AttributeParameters parameters, int version) {
 		if (parameters.scrollGlint && parameters.type == ShaderType.VERTEX) {
 			transformer.replaceExpression("gl_MultiTexCoord0", "(gl_TextureMatrix[0] * gl_MultiTexCoord0)", GLSLParser::postfix_expression);
@@ -91,9 +92,17 @@ class AttributeTransformer {
 			}
 			texCoordReplacements.forEach(transformer::replaceExpression);
 
+			// Cached inventory meshes reserve -1/65535 for the lightmap inherited at each draw.
+			if (parameters.inputs.lightmap && parameters.instancing == Instancing.NONE) {
+				transformer.injectVariable("uniform vec2 angelica_CurrentLightmapCoord;");
+				transformer.replaceExpression("gl_MultiTexCoord1",
+					"((iris_MultiTexCoord1.x == -1.0 || iris_MultiTexCoord1.x == 65535.0)"
+						+ " ? vec4(angelica_CurrentLightmapCoord, 0.0, 1.0) : iris_MultiTexCoord1)");
+			}
+
 			// Rename remaining gl_MultiTexCoord references to iris_ versions
 			transformer.rename("gl_MultiTexCoord0", "iris_MultiTexCoord0");
-			transformer.rename("gl_MultiTexCoord1", "iris_MultiTexCoord1");
+            transformer.rename("gl_MultiTexCoord1", "iris_MultiTexCoord1");
 
 			if (transformer.hasVariable("gl_MultiTexCoord3") && !transformer.hasVariable("mc_midTexCoord")) {
 				transformer.rename("gl_MultiTexCoord3", "mc_midTexCoord");

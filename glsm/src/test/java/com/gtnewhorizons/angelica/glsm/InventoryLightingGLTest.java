@@ -83,16 +83,18 @@ class InventoryLightingGLTest {
         final DirectTessellator tess = (DirectTessellator) TessellatorManager.get();
         tess.startDrawing(GL11.GL_QUADS);
         tess.setNormal(0, 0, 1);
-        InventoryLighting.separateBrightnessRuns(tess, false);
+        InventoryLighting.inheritCurrentBrightness(tess, false);
         tess.setColorRGBA(255, 255, 255, 255);
         quad(tess, -0.9f, -0.4f);
-        InventoryLighting.separateBrightnessRuns(tess, true);
+        InventoryLighting.inheritCurrentBrightness(tess, true);
         tess.setBrightness(0xF000F0);
         quad(tess, -0.2f, 0.2f);
-        InventoryLighting.separateBrightnessRuns(tess, false);
+        InventoryLighting.inheritCurrentBrightness(tess, false);
         quad(tess, 0.4f, 0.9f);
         tess.draw();
         GLStateManager.glEndList();
+        assertEquals(1, DisplayListManager.getDisplayList(list).getOwnedVbos().getVBOs().length,
+            "ordinary and emissive faces must keep a single cached draw");
         configureUnredirectedVertexInputs();
     }
 
@@ -131,7 +133,7 @@ class InventoryLightingGLTest {
         }
     }
 
-    /** Emits one complete face so brightness runs can be separated at a primitive boundary. */
+    /** Emits one complete face before or after an emissive brightness change. */
     private static void quad(DirectTessellator tess, float left, float right) {
         tess.addVertex(left, -0.8f, 0);
         tess.addVertex(right, -0.8f, 0);

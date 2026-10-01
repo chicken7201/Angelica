@@ -66,7 +66,8 @@ public class CompatUniformManager {
     static final int LOC_IRIS_MODELVIEW_INVERSE = LOC_MAT_BASE + MAT_FIELDS; // 48
     static final int LOC_IRIS_PROJECTION_INVERSE = LOC_IRIS_MODELVIEW_INVERSE + 1; // 49
 
-    static final int LOC_COUNT = LOC_IRIS_PROJECTION_INVERSE + 1; // 50
+    static final int LOC_CURRENT_LIGHTMAP_COORD = LOC_IRIS_PROJECTION_INVERSE + 1; // 50
+    static final int LOC_COUNT = LOC_CURRENT_LIGHTMAP_COORD + 1; // 51
 
     private static final String[] LIGHT_FIELD_NAMES = {
         "ambient", "diffuse", "specular", "position", "halfVector",
@@ -98,6 +99,7 @@ public class CompatUniformManager {
         UNIFORM_NAMES[LOC_IRIS_TEXTURE_MATRIX] = "iris_TextureMatrix";
         UNIFORM_NAMES[LOC_IRIS_MODELVIEW_INVERSE] = "iris_ModelViewMatrixInverse";
         UNIFORM_NAMES[LOC_IRIS_PROJECTION_INVERSE] = "iris_ProjectionMatrixInverse";
+        UNIFORM_NAMES[LOC_CURRENT_LIGHTMAP_COORD] = "angelica_CurrentLightmapCoord";
         UNIFORM_NAMES[LOC_ALPHA_TEST_REF] = "angelica_currentAlphaTest";
         UNIFORM_NAMES[LOC_SCENE_COLOR] = "angelica_SceneColor";
         UNIFORM_NAMES[LOC_CLIP_PLANES] = "angelica_ClipPlane[0]";
@@ -120,6 +122,7 @@ public class CompatUniformManager {
         GLContextState owner;
         int lastMvGen = -1, lastMvLinearGen = -1, lastProjGen = -1, lastTexMatGen = -1;
         int lastFragmentGen = -1, lastLightingGen = -1, lastClipPlaneGen = -1;
+        float lastBrightnessX = Float.NaN, lastBrightnessY = Float.NaN;
         ProgramUniforms(int[] locs) { this.locs = locs; }
     }
 
@@ -186,6 +189,7 @@ public class CompatUniformManager {
             pu.owner = glCtx;
             pu.lastMvGen = pu.lastMvLinearGen = pu.lastProjGen = pu.lastTexMatGen = -1;
             pu.lastFragmentGen = pu.lastLightingGen = pu.lastClipPlaneGen = -1;
+            pu.lastBrightnessX = pu.lastBrightnessY = Float.NaN;
         }
 
         // Matrix uniforms — skip if this program's storage already holds the current generation
@@ -228,6 +232,14 @@ public class CompatUniformManager {
                 pu.lastClipPlaneGen = cpGen;
                 uploadClipPlanes(locs);
             }
+        }
+
+        // Keep inherited inventory light dynamic without uploading unchanged values or allocating buffers.
+        if (locs[LOC_CURRENT_LIGHTMAP_COORD] != -1
+            && (pu.lastBrightnessX != glCtx.lastBrightnessX || pu.lastBrightnessY != glCtx.lastBrightnessY)) {
+            pu.lastBrightnessX = glCtx.lastBrightnessX;
+            pu.lastBrightnessY = glCtx.lastBrightnessY;
+            RENDER_BACKEND.uniform2f(locs[LOC_CURRENT_LIGHTMAP_COORD], glCtx.lastBrightnessX, glCtx.lastBrightnessY);
         }
 
         return true;

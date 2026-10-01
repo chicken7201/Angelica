@@ -15,8 +15,8 @@ public abstract class MixinSBRInventoryContext {
     /** Keeps cached non-emissive machine faces responsive to the held item's current lightmap. */
     @Inject(method = "setupColor(Lnet/minecraftforge/common/util/ForgeDirection;I)Lgregtech/api/render/ISBRInventoryContext;",
         at = @At("HEAD"), require = 0)
-    private void angelica$separateInventoryBrightness(ForgeDirection side, int color, CallbackInfoReturnable<Object> cir) {
-        InventoryLighting.separateBrightnessRuns(TessellatorManager.get(),
+    private void angelica$inheritInventoryBrightness(ForgeDirection side, int color, CallbackInfoReturnable<Object> cir) {
+        InventoryLighting.inheritCurrentBrightness(TessellatorManager.get(),
             ((MixinSBRContextBaseAccessor) (Object) this).angelica$hasBrightnessOverride());
     }
 }

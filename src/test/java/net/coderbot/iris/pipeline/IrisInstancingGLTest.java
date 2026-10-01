@@ -2,6 +2,8 @@ package net.coderbot.iris.pipeline;
 
 import com.gtnewhorizons.angelica.glsm.GLCoreTest;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
+import com.gtnewhorizons.angelica.glsm.CompatShaderTransformer;
+import com.gtnewhorizons.angelica.glsm.CompatUniformManager;
 import com.gtnewhorizons.angelica.glsm.RenderSystem;
 import com.gtnewhorizons.angelica.glsm.ffp.Instancing;
 import com.gtnewhorizons.angelica.glsm.ffp.InstancedAttribs;
@@ -30,7 +32,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL15;
 import org.lwjgl.BufferUtils;
@@ -329,6 +333,69 @@ class IrisInstancingGLTest {
         final Map<PatchShaderType, String> result = TransformPatcher.patchAttributesInstanced(
             TEMPLATE_VERTEX, geometry, null, null, TEMPLATE_FRAGMENT, TEX_LM, false, Instancing.TEMPLATE);
         link("explicitGeometryInput", result);
+    }
+
+    /** Verifies inherited and explicit lightmap values in Iris and foreign shaders on the GPU. */
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void cachedInventoryLightmapUsesLiveBrightnessWithoutExtraDraws(boolean iris) {
+        final String vertex = """
+            #version 120
+            varying vec2 lighting;
+            void main() {
+                gl_Position = vec4(gl_VertexID == 1 ? 3.0 : -1.0, gl_VertexID == 2 ? 3.0 : -1.0, 0.0, 1.0);
+                lighting = gl_MultiTexCoord1.xy / 240.0;
+            }
+            """;
+        final String fragment = """
+            #version 120
+            varying vec2 lighting;
+            void main() { gl_FragData[0] = vec4(lighting, 0.0, 1.0); }
+            """;
+        final Map<PatchShaderType, String> sources = iris
+            ? TransformPatcher.patchAttributes(vertex, null, fragment, TEX_LM)
+            : Map.of(PatchShaderType.VERTEX, CompatShaderTransformer.transform(vertex, GL20.GL_VERTEX_SHADER, false),
+                PatchShaderType.FRAGMENT, CompatShaderTransformer.transform(fragment, GL20.GL_FRAGMENT_SHADER, true));
+        final int program = linkProgram("inheritedInventoryLight", sources);
+        final int vao = GLStateManager.glGenVertexArrays();
+        final float oldX = GLStateManager.ctx().lastBrightnessX, oldY = GLStateManager.ctx().lastBrightnessY;
+        GLStateManager.glPushAttrib(GL11.GL_ALL_ATTRIB_BITS);
+        try {
+            GLStateManager.disableDepthTest();
+            GLStateManager.disableCull();
+            GLStateManager.disableBlend();
+            GLStateManager.disableAlphaTest();
+            GLStateManager.glColorMask(true, true, true, true);
+            GLStateManager.glViewport(0, 0, 8, 8);
+            GLStateManager.glUseProgram(program);
+            GLStateManager.glUniform1i(GLStateManager.glGetUniformLocation(program, "iris_currentAlphaFunc"), 7);
+            GLStateManager.glBindVertexArray(vao);
+            GLStateManager.glDisableVertexAttribArray(3);
+            assertTrue(GLStateManager.glGetUniformLocation(program, "angelica_CurrentLightmapCoord") >= 0);
+            for (int light : new int[] {0, 240, 0}) {
+                GLStateManager.setLightmapTextureCoords(GL13.GL_TEXTURE1, light, light);
+                for (float vertexLight : new float[] {-1, 65535, 240, 120}) {
+                    GLStateManager.glVertexAttrib4f(3, vertexLight, vertexLight, 0, 1);
+                    CompatUniformManager.refreshCompatUniforms(program, GLStateManager.ctx());
+                    GLStateManager.glClearColor(0, 0, 0, 1);
+                    GLStateManager.glClear(GL11.GL_COLOR_BUFFER_BIT);
+                    GLStateManager.glDrawArrays(GL11.GL_TRIANGLES, 0, 3);
+                    final int expected = vertexLight == -1 || vertexLight == 65535
+                        ? light * 255 / 240 : Math.round(vertexLight * 255 / 240);
+                    final int[] pixel = FfpFixture.readPixel(0, 0);
+                    assertEquals(expected, pixel[0], 1, "inherited or explicit block light");
+                    assertEquals(expected, pixel[1], 1, "inherited or explicit sky light");
+                    assertEquals(GL11.GL_NO_ERROR, GL11.glGetError());
+                }
+            }
+        } finally {
+            GLStateManager.setLightmapTextureCoords(GL13.GL_TEXTURE1, oldX, oldY);
+            GLStateManager.glUseProgram(0);
+            GLStateManager.glBindVertexArray(0);
+            GLStateManager.glDeleteVertexArrays(vao);
+            GLStateManager.glDeleteProgram(program);
+            GLStateManager.glPopAttrib();
+        }
     }
 
     private static void link(String name, Map<PatchShaderType, String> result) {

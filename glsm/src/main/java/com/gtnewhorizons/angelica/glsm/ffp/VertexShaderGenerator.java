@@ -302,6 +302,7 @@ public final class VertexShaderGenerator {
         sb.append('\n');
     }
 
+    /** Emits texture coordinates and resolves cached inventory vertices against live lightmap coordinates. */
     private static void emitTexCoordPassthrough(StringBuilder sb, VertexKey key) {
         final boolean cube = key.instancing() == Instancing.CUBE;
         final boolean unit0FromCube = cube && key.unitTexCoordEnabled(0) && !key.texGenEnabled();
@@ -327,7 +328,9 @@ public final class VertexShaderGenerator {
                 case PARTICLE, TEMPLATE -> "a_InstLightmap";
                 case CUBE -> "a_InstLightmapScale.xy";
                 case WEATHER -> "weatherTex1.xy";
-                case NONE -> key.hasVertexLightmap() ? "a_TexCoord1" : "u_CurrentLightmapCoord";
+                case NONE -> key.hasVertexLightmap()
+                    ? "((a_TexCoord1.x == -1.0 || a_TexCoord1.x == 65535.0) ? u_CurrentLightmapCoord : a_TexCoord1)"
+                    : "u_CurrentLightmapCoord";
             };
             sb.append("  v_TexCoord1 = u_LightmapTextureMatrix * vec4(").append(lightmap).append(", 0.0, 1.0);\n");
         }
