@@ -21,6 +21,12 @@ public interface ImmediateExtendedAttribHandler {
 
     boolean wantsExtendedCapture();
 
+    /** Indicates whether missing normals should be generated per quad. */
+    boolean wantsFaceNormals();
+
+    /** Fills packed face normals for complete quads in the raw vertex buffer. */
+    void writeFaceNormals(int[] rawBuffer, int vertexCount);
+
     void build(int[] rawBuffer, int vertexCount, int vertsPerPrim, int normalIntIndex, long dstAddr, int dstStride);
 
     void buildPacked(long srcBase, int stride, int posOffset, int texOffset, int normalOffset,

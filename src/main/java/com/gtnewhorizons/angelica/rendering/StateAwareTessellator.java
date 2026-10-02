@@ -9,6 +9,9 @@ public interface StateAwareTessellator {
     int RENDERED_WITH_VANILLA_AO = 0x1;
     int NO_DIRECTIONAL_SHADING = 0x2;
 
+    /// Explicitly render an unmapped material instead of inheriting the surrounding block's shader ID.
+    short UNMAPPED_SHADER_BLOCK_ID = Short.MIN_VALUE;
+
     void angelica$setAppliedAo(boolean flag);
     void angelica$setNoDirectionalShading(boolean flag);
 
@@ -17,9 +20,19 @@ public interface StateAwareTessellator {
     /// Enables per-vertex AO state collection into [#angelica$getVertexStates()].
     void angelica$setCeleritasMeshing(boolean active);
 
+    /** Reports whether this tessellator is collecting terrain mesh state. */
+    default boolean angelica$isCeleritasMeshing() {
+        return false;
+    }
+
     int[] angelica$getVertexStates();
 
     int[] angelica$getShaderOverrideBlockIds();
 
     void angelica$setShaderOverrideBlockId(short blockId);
+
+    /** Returns the current override, or the inherited material sentinel. */
+    default short angelica$getShaderOverrideBlockId() {
+        return -1;
+    }
 }
