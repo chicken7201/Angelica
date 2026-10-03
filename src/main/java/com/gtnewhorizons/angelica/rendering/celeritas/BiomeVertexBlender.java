@@ -1,9 +1,17 @@
 package com.gtnewhorizons.angelica.rendering.celeritas;
 
 import com.gtnewhorizon.gtnhlib.client.renderer.TessellatorManager;
+import com.gtnewhorizons.angelica.config.AngelicaConfig;
 import com.gtnewhorizons.angelica.proxy.ClientProxy;
+import com.prupe.mcpatcher.ctm.CTMUtils;
+import jss.notfine.config.MCPatcherForgeConfig;
 import me.jellysquid.mods.sodium.client.gui.options.named.BiomeBlendMode;
+import net.minecraft.block.BlockGrass;
 import net.minecraft.client.renderer.RenderBlocks;
+import net.minecraft.client.renderer.Tessellator;
+import net.minecraft.init.Blocks;
+import net.minecraft.util.IIcon;
+import net.minecraft.world.IBlockAccess;
 import org.embeddedt.embeddium.api.util.ColorMixer;
 
 import java.nio.ByteOrder;
@@ -23,7 +31,13 @@ public final class BiomeVertexBlender {
     private boolean replacedBlockTint;
     private final int[] cornerColors = new int[8];
     private int populatedCorners;
+    private float savedRtl, savedGtl, savedBtl, savedRbl, savedGbl, savedBbl;
+    private float savedRbr, savedGbr, savedBbr, savedRtr, savedGtr, savedBtr;
+    private boolean savedAo;
+    private int savedLtl, savedLbl, savedLbr, savedLtr;
+    private int savedColor, savedBrightness;
 
+    /** Initializes the biome cache and block position for this draw. */
     public void setup(SmoothBiomeColorCache cache, SmoothBiomeColorCache.ColorType type, int x, int y, int z) {
         this.cache = cache;
         this.type = type;
@@ -34,25 +48,29 @@ public final class BiomeVertexBlender {
         this.populatedCorners = 0;
     }
 
+    /** Releases the active biome tint context. */
     public void clear() {
         cache = null;
         type = null;
         replacedBlockTint = false;
     }
 
+    /** Identifies grass faces that need biome tinting. */
     public boolean isGrass() {
         return type == SmoothBiomeColorCache.ColorType.GRASS;
     }
 
-    /** Identifies water tinting that must be applied as vertices are emitted. */
+    /** Identifies water tinting applied as vertices are emitted. */
     public boolean isWater() {
         return type == SmoothBiomeColorCache.ColorType.WATER;
     }
 
+    /** Reports whether the uniform block tint has been deferred. */
     public boolean isActive() {
         return replacedBlockTint;
     }
 
+    /** Checks whether the active tessellator is blending biome colors. */
     public static boolean isRendering() {
         if (SmoothBiomeColorCache.getActiveCache() == null || ClientProxy.options().quality.biomeBlendMode != BiomeBlendMode.FANCY) return false;
         final BiomeVertexBlender blender = ((BiomeBlendTessellator) TessellatorManager.get()).angelica$getBiomeBlender();
@@ -65,7 +83,68 @@ public final class BiomeVertexBlender {
         return 0xFFFFFF;
     }
 
-    /** Multiplies the four face corner colors by their interpolated biome tints. */
+    /** Applies biome tint while preserving the original face color and lighting. */
+    public boolean beginFace(RenderBlocks renderer, int face, double x, double y, double z, IIcon icon) {
+        if (!isActive()) return false;
+        final Tessellator tessellator = TessellatorManager.get();
+        if (((BiomeBlendTessellator) tessellator).angelica$getBiomeBlender() != this) return false;
+        final IIcon originalIcon = AngelicaConfig.enableMCPatcherForgeFeatures && MCPatcherForgeConfig.ConnectedTextures.enabled ? CTMUtils.getOriginalIcon(icon) : icon;
+        if (isGrass() && icon != Blocks.grass.getIcon(1, 0) && icon != BlockGrass.getIconSideOverlay()
+            && originalIcon != Blocks.grass.getIcon(1, 0) && originalIcon != BlockGrass.getIconSideOverlay()) {
+            return false;
+        }
+
+        savedRtl = renderer.colorRedTopLeft; savedGtl = renderer.colorGreenTopLeft; savedBtl = renderer.colorBlueTopLeft;
+        savedRbl = renderer.colorRedBottomLeft; savedGbl = renderer.colorGreenBottomLeft; savedBbl = renderer.colorBlueBottomLeft;
+        savedRbr = renderer.colorRedBottomRight; savedGbr = renderer.colorGreenBottomRight; savedBbr = renderer.colorBlueBottomRight;
+        savedRtr = renderer.colorRedTopRight; savedGtr = renderer.colorGreenTopRight; savedBtr = renderer.colorBlueTopRight;
+        final boolean ao = savedAo = renderer.enableAO;
+        savedLtl = renderer.brightnessTopLeft; savedLbl = renderer.brightnessBottomLeft;
+        savedLbr = renderer.brightnessBottomRight; savedLtr = renderer.brightnessTopRight;
+        final int color = savedColor = tessellator.color;
+        final int brightness = savedBrightness = tessellator.brightness;
+        if (!ao) {
+            final int abgr = nativeToABGR(color);
+            renderer.colorRedTopLeft = renderer.colorRedBottomLeft = renderer.colorRedBottomRight = renderer.colorRedTopRight = (abgr & 255) / 255.0f;
+            renderer.colorGreenTopLeft = renderer.colorGreenBottomLeft = renderer.colorGreenBottomRight = renderer.colorGreenTopRight = (abgr >> 8 & 255) / 255.0f;
+            renderer.colorBlueTopLeft = renderer.colorBlueBottomLeft = renderer.colorBlueBottomRight = renderer.colorBlueTopRight = (abgr >> 16 & 255) / 255.0f;
+            renderer.brightnessTopLeft = renderer.brightnessBottomLeft = renderer.brightnessBottomRight = renderer.brightnessTopRight = brightness;
+            renderer.enableAO = true;
+        }
+        try {
+            tintFace(renderer, face, x, y, z);
+        } catch (Throwable t) {
+            endFace(renderer);
+            throw t;
+        }
+        return true;
+    }
+
+    /** Restores face color, ambient occlusion and tessellator lighting. */
+    public void endFace(RenderBlocks renderer) {
+        renderer.colorRedTopLeft = savedRtl; renderer.colorGreenTopLeft = savedGtl; renderer.colorBlueTopLeft = savedBtl;
+        renderer.colorRedBottomLeft = savedRbl; renderer.colorGreenBottomLeft = savedGbl; renderer.colorBlueBottomLeft = savedBbl;
+        renderer.colorRedBottomRight = savedRbr; renderer.colorGreenBottomRight = savedGbr; renderer.colorBlueBottomRight = savedBbr;
+        renderer.colorRedTopRight = savedRtr; renderer.colorGreenTopRight = savedGtr; renderer.colorBlueTopRight = savedBtr;
+        renderer.enableAO = savedAo;
+        if (!savedAo) {
+            renderer.brightnessTopLeft = savedLtl; renderer.brightnessBottomLeft = savedLbl;
+            renderer.brightnessBottomRight = savedLbr; renderer.brightnessTopRight = savedLtr;
+            final Tessellator tessellator = TessellatorManager.get();
+            tessellator.color = savedColor;
+            tessellator.brightness = savedBrightness;
+        }
+    }
+
+    /** Samples cached biome color for the supplied block access. */
+    public static long smoothColor(IBlockAccess access, SmoothBiomeColorCache.ColorType type, int x, int y, int z) {
+        final SmoothBiomeColorCache cache = SmoothBiomeColorCache.getActiveCache();
+        if (cache != null) return cache.getColor(type, x, y, z) & 0xFFFFFFFFL;
+        if (access instanceof WorldClientExtension ext) return ext.celeritas$getSmoothBiomeColorCache().getColor(type, x, y, z) & 0xFFFFFFFFL;
+        return -1L;
+    }
+
+    /** Multiplies face corner colors by interpolated biome tints. */
     public void tintFace(RenderBlocks renderer, int face, double x, double y, double z) {
         final int[] corners = FACE_CORNERS[face];
         final int tl = faceColor(renderer, face, corners[0], x, y, z);
@@ -95,11 +174,12 @@ public final class BiomeVertexBlender {
             z + ((corner & 4) == 0 ? renderer.renderMinZ : renderer.renderMaxZ));
     }
 
-    /** Converts a native packed vertex color to consistent ABGR channel order. */
+    /** Converts native packed vertex color to ABGR channel order. */
     public static int nativeToABGR(int color) {
         return LITTLE_ENDIAN ? color : Integer.reverseBytes(color);
     }
 
+    /** Applies interpolated biome tint to a packed vertex color. */
     public int tint(int nativeColor, double x, double y, double z) {
         if (!replacedBlockTint) return nativeColor;
         final int rgb = sampleVertex(x, y, z);
@@ -108,6 +188,7 @@ public final class BiomeVertexBlender {
         return LITTLE_ENDIAN ? tinted : Integer.reverseBytes(tinted);
     }
 
+    /** Interpolates cached biome colors at the rendered vertex. */
     private int sampleVertex(double x, double y, double z) {
         final double dx = x - blockX;
         final double dy = y - blockY;
@@ -124,6 +205,7 @@ public final class BiomeVertexBlender {
         return cornerColors[corner];
     }
 
+    /** Interpolates the four biome samples surrounding this vertex. */
     static int vertexColor(SmoothBiomeColorCache cache, SmoothBiomeColorCache.ColorType type, double x, double y, double z) {
         x -= 0.5;
         y -= 0.5;
@@ -140,6 +222,7 @@ public final class BiomeVertexBlender {
         return z0 == z1 ? z0 : ColorMixer.mix(z1, z0, (float) (x - ix));
     }
 
+    /** Multiplies packed color channels while preserving alpha. */
     static int multiply(int abgr, int rgb) {
         final int r = (abgr & 255) * ((rgb >> 16) & 255) / 255;
         final int g = ((abgr >> 8) & 255) * ((rgb >> 8) & 255) / 255;

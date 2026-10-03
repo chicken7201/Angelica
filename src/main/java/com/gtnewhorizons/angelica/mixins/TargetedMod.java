@@ -22,6 +22,7 @@ public enum TargetedMod implements ITargetMod {
     FARSEEK("farseek.core.FarseekCoreMod", "farseek"),
     FALSETWEAKS("com.falsepattern.falsetweaks.asm.CoreLoadingPlugin", "falsetweaks"),
     GREGTECH(null, "gregtech"),
+    LUMI("com.falsepattern.lumi.internal.asm.ASMLoadingPlugin", "lumi"),
     MINEFACTORY_RELOADED(null, "MineFactoryReloaded"),
     NTM_SPACE("com.hbm.dim.SolarSystem"),
     IC2("ic2.core.coremod.IC2core", "IC2"),

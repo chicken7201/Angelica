@@ -1,19 +1,14 @@
 package com.gtnewhorizons.angelica.mixins.late.client.ntmSpace;
 
+import com.gtnewhorizons.angelica.experimental.surround.Surround;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.utils.WorkaroundUtils;
-import com.hbm.dim.CelestialBody;
 import com.hbm.dim.SkyProviderCelestial;
 import com.llamalad7.mixinextras.injector.v2.WrapWithCondition;
-import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
-import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
-import com.llamalad7.mixinextras.sugar.Share;
-import com.llamalad7.mixinextras.sugar.ref.LocalIntRef;
 import jss.notfine.core.Settings;
 import net.coderbot.iris.Iris;
 import net.coderbot.iris.pipeline.WorldRenderingPhase;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.client.renderer.Tessellator;
 import org.lwjgl.opengl.GL11;
 import org.objectweb.asm.Opcodes;
@@ -30,7 +25,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(value = SkyProviderCelestial.class, priority = 100, remap = false)
 public class MixinSkyProviderCelestial {
-	
+
+	@Unique
+	private int angelica$previousProgram;
+
 	/**
 	 * Avoid program rebinding due to pipeline.setInputs
 	 */
@@ -44,7 +42,7 @@ public class MixinSkyProviderCelestial {
 	private boolean iris$common$redirectTex2D(int cap) {
 		return this.iris$common$redirectTexture(cap);
 	}
-	
+
 	/**
 	 * Avoid program rebinding due to pipeline.setInputs | Doesn't affect texture disabling before glSkyList
 	 */
@@ -56,7 +54,7 @@ public class MixinSkyProviderCelestial {
 	private boolean iris$common$redirectTex2DException(int cap) {
 		return this.iris$common$redirectTexture(cap);
 	}
-	
+
 	@Unique
 	private boolean iris$common$redirectTexture(int cap) {
 		if (cap == GL11.GL_TEXTURE_2D) {
@@ -65,7 +63,7 @@ public class MixinSkyProviderCelestial {
 		}
 		return true;
 	}
-	
+
 	/**
 	 * Force skybox to render with the default program | Fix various issues with shaders enabled
 	 */
@@ -73,26 +71,29 @@ public class MixinSkyProviderCelestial {
 			, at = @At(value = "INVOKE"
 				, target = "Lnet/minecraft/client/renderer/RenderHelper;disableStandardItemLighting()V"
 				, remap = true))
-	public void iris$main$renderInDefaultProgram(CallbackInfo ci, @Share("main$previousProgram") LocalIntRef main$previousProgram) {
-		main$previousProgram.set(GLStateManager.getActiveProgram());
+	public void iris$main$renderInDefaultProgram(CallbackInfo ci) {
+		angelica$previousProgram = GLStateManager.getActiveProgram();
 		GLStateManager.glUseProgram(0);
 	}
-	
-	@WrapOperation(method = "render"
+
+	@Surround(method = "render"
 			, at = @At(value = "INVOKE"
 				, target = "Lcom/hbm/dim/SkyProviderCelestial;renderSun(FLnet/minecraft/client/multiplayer/WorldClient;Lnet/minecraft/client/Minecraft;Lcom/hbm/dim/CelestialBody;DDFF)V"))
-	private void iris$main$renderSunInShaderProgram(SkyProviderCelestial instance, float partialTicks, WorldClient world, Minecraft mc, CelestialBody sun, double sunSize, double coronaSize, float visibility, float pressure, Operation<Void> original, @Share("main$previousProgram") LocalIntRef main$previousProgram){
-		GLStateManager.glUseProgram(main$previousProgram.get());
-		original.call(instance, partialTicks, world, mc, sun, sunSize, coronaSize, visibility, pressure);
+	private void iris$main$renderSunInShaderProgram(){
+		GLStateManager.glUseProgram(angelica$previousProgram);
+	}
+
+	@Surround.Finally
+	private void iris$main$renderSunInShaderProgramEnd() {
 		GLStateManager.glUseProgram(0);
 	}
-	
+
 	@Inject(method = "render"
 			, at = @At(value = "TAIL"))
-	public void iris$main$restorePreviousProgram(CallbackInfo ci, @Share("main$previousProgram") LocalIntRef main$previousProgram) {
-		GLStateManager.glUseProgram(main$previousProgram.get());
+	public void iris$main$restorePreviousProgram(CallbackInfo ci) {
+		GLStateManager.glUseProgram(angelica$previousProgram);
 	}
-	
+
 	@Inject(method = "renderSun"
 			, at = @At(value = "INVOKE"
 				, target = "Lnet/minecraft/client/renderer/Tessellator;draw()I"
@@ -109,7 +110,7 @@ public class MixinSkyProviderCelestial {
 	private void iris$sun$disableBlanking(CallbackInfo ci) {
 		Tessellator.instance.vertexCount = 0;
 	}
-	
+
 	@Inject(method = "render"
 			, at = @At(value = "INVOKE"
 				, target = "Lnet/minecraft/client/renderer/Tessellator;draw()I"
@@ -126,7 +127,7 @@ public class MixinSkyProviderCelestial {
 	private void iris$main$disableVoid(CallbackInfo ci) {
 		Tessellator.instance.vertexCount = 0;
 	}
-	
+
 	@WrapWithCondition(method = "render"
 			, at = {
 				@At(value = "INVOKE"
@@ -139,7 +140,7 @@ public class MixinSkyProviderCelestial {
 	private boolean angelica$renderHorizon(int i) {
 		return (boolean) Settings.HORIZON.option.getStore();
 	}
-	
+
 	@Inject(method = "render"
 			, at = @At(value = "FIELD"
 				, target = "Lnet/minecraft/client/renderer/Tessellator;instance:Lnet/minecraft/client/renderer/Tessellator;"
@@ -158,11 +159,11 @@ public class MixinSkyProviderCelestial {
 				p -> GLStateManager.glRotatef(p.getSunPathRotation(), 0.0F, 0.0F, 1.0F)
 		);
 	}
-	
+
 	@Inject(method = "renderSun"
 			, at = @At(value = "HEAD"))
 	private void iris$setSunRenderStage(CallbackInfo ci) {
 		Iris.getPipelineManager().getPipeline().ifPresent(p -> p.setPhase(WorldRenderingPhase.SUN));
 	}
-	
+
 }
