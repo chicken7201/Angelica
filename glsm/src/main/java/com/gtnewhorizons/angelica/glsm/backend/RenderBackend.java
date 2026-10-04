@@ -36,6 +36,9 @@ public abstract class RenderBackend {
     /** Returns true if the current thread has a valid render context. */
     public abstract boolean hasContext();
 
+    /** Returns true if the calling thread may issue render commands. */
+    public boolean hasContextOnThread() { return hasContext(); }
+
     /** Returns true if the calling thread owns the "GL Context" */
     public abstract boolean isCurrent();
 
@@ -504,6 +507,10 @@ public abstract class RenderBackend {
     public abstract int getUniformLocation(int program, ByteBuffer name);
     public boolean isShader(int obj) { return false; }
     public boolean isProgram(int obj) { return false; }
+    public boolean supportsProgramBinary() { return false; }
+    public void programParameteri(int program, int pname, int value) {}
+    public void getProgramBinary(int program, IntBuffer length, IntBuffer binaryFormat, ByteBuffer binary) {}
+    public void programBinary(int program, int binaryFormat, ByteBuffer binary) {}
     public void validateProgram(int program) {}
     public void getAttachedShaders(int program, IntBuffer count, IntBuffer shaders) {
         if (count != null) count.put(0, 0);

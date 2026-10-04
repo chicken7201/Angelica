@@ -12,11 +12,9 @@ import com.gtnewhorizons.angelica.glsm.StateSet;
 import com.gtnewhorizons.angelica.glsm.ffp.FFPVertexLighting;
 import com.gtnewhorizons.angelica.glsm.ffp.ShaderManager;
 import com.gtnewhorizons.angelica.glsm.hooks.GLSMConfig;
-import com.gtnewhorizons.angelica.glsm.states.PolygonState;
 import com.gtnewhorizons.angelica.glsm.streaming.PersistentStreamingBuffer;
 import com.gtnewhorizons.angelica.glsm.streaming.StreamingUploader;
 import com.gtnewhorizons.angelica.hudcaching.HUDCaching;
-import com.gtnewhorizons.angelica.mixins.interfaces.FontRendererAccessor;
 import com.gtnewhorizons.angelica.rendering.tesr.BatchDrawDefaults;
 import com.gtnewhorizons.angelica.rendering.tesr.ModelPartBatcher;
 import com.gtnewhorizons.angelica.rendering.tesr.TesrBatchRenderer;
@@ -29,7 +27,6 @@ import net.coderbot.iris.layer.GbufferPrograms;
 import net.coderbot.iris.pipeline.DeferredWorldRenderingPipeline;
 import net.coderbot.iris.pipeline.PipelineManager;
 import net.coderbot.iris.uniforms.CapturedRenderingState;
-import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.FontRenderer;
 import net.minecraft.client.renderer.Tessellator;
 import net.minecraft.util.MathHelper;
@@ -62,6 +59,8 @@ import static com.gtnewhorizons.angelica.client.font.ColorCodeUtils.FORMATTING_C
 import static com.gtnewhorizons.angelica.client.font.ColorCodeUtils.GRADIENT_PAYLOAD;
 import static com.gtnewhorizons.angelica.client.font.ColorCodeUtils.SECTION_X_LENGTH;
 import static com.gtnewhorizons.angelica.client.font.ColorCodeUtils.SECTION_X_PAYLOAD;
+import static com.gtnewhorizons.angelica.client.font.FontStrategist.INVALID_TEXTURE;
+import static com.gtnewhorizons.angelica.client.font.FontStrategist.bindIntTexture;
 
 /**
  * A batching replacement for {@code FontRenderer}
@@ -192,9 +191,9 @@ public class BatchingFontRenderer {
     private boolean lightmapActive = false;
     private int lightmapTextureId = 0;
     private int lightmapPackedLight = -1;
-    private final FontRenderState batchRenderState = new FontRenderState();
-    private final FontRenderState scratchRenderState = new FontRenderState();
-    private boolean batchRenderStateValid;
+
+    private final TextDrawState drawState = new TextDrawState();
+    private final TextDrawState liveDrawState = new TextDrawState();
 
     private final Vector3f lightingFactor = new Vector3f(1.0f, 1.0f, 1.0f);
     private boolean lightingFactorActive = false;
@@ -214,8 +213,8 @@ public class BatchingFontRenderer {
         return GLStateManager.getProjectionMatrix().m33() == 0.0f;
     }
 
-    /** Captures every call-site state that must remain attached to the next text segment. */
-    private void captureSegmentState() {
+    /** Captures the world lightmap attached to the next text segment. */
+    private void captureLightmapState() {
         final int unitBinding = GLStateManager.getTextures().getTextureUnitBindings(LIGHTMAP_TEX_UNIT).getBinding();
 
         final boolean active = isWorldSpaceText() && unitBinding != 0
@@ -233,11 +232,7 @@ public class BatchingFontRenderer {
         }
         final int packedLight = active ? GLSMConfig.packedLastBrightness() : FULL_BRIGHT_LIGHT;
 
-        scratchRenderState.capture();
-        final boolean lightmapChanged = active != lightmapActive || u != lightmapU || v != lightmapV
-            || texture != lightmapTextureId || packedLight != lightmapPackedLight;
-        final boolean renderStateChanged = !batchRenderStateValid || !batchRenderState.sameAs(scratchRenderState);
-        if (!lightmapChanged && !renderStateChanged) {
+        if (active == lightmapActive && u == lightmapU && v == lightmapV && texture == lightmapTextureId && packedLight == lightmapPackedLight) {
             return;
         }
         sealBatchSegment();
@@ -246,72 +241,20 @@ public class BatchingFontRenderer {
         lightmapV = v;
         lightmapTextureId = texture;
         lightmapPackedLight = packedLight;
-        batchRenderState.set(scratchRenderState);
-        batchRenderStateValid = true;
     }
 
-    /** Stores the depth and polygon state that affects rasterization of one text segment. */
-    static final class FontRenderState {
-        boolean depthTestEnabled;
-        boolean depthMask;
-        int depthFunc;
-        boolean polygonOffsetFillEnabled;
-        float polygonOffsetFactor;
-        float polygonOffsetUnits;
-        float polygonOffsetClamp;
 
-        /** Reads the effective call-site raster state from GLSM. */
-        void capture() {
-            depthTestEnabled = GLStateManager.getDepthTest().isEffectivelyEnabled();
-            depthMask = GLStateManager.isEffectiveDepthMaskEnabled();
-            depthFunc = GLStateManager.getDepthState().getFunc();
-            polygonOffsetFillEnabled = GLStateManager.getPolygonOffsetFillState().isEffectivelyEnabled();
-            final PolygonState polygon = GLStateManager.getPolygonState();
-            polygonOffsetFactor = polygon.getOffsetFactor();
-            polygonOffsetUnits = polygon.getOffsetUnits();
-            polygonOffsetClamp = polygon.getOffsetClamp();
-        }
-
-        /** Copies a captured raster state without allocating during batching. */
-        void set(FontRenderState state) {
-            depthTestEnabled = state.depthTestEnabled;
-            depthMask = state.depthMask;
-            depthFunc = state.depthFunc;
-            polygonOffsetFillEnabled = state.polygonOffsetFillEnabled;
-            polygonOffsetFactor = state.polygonOffsetFactor;
-            polygonOffsetUnits = state.polygonOffsetUnits;
-            polygonOffsetClamp = state.polygonOffsetClamp;
-        }
-
-        /** Reports whether two text segments can share one raster-state replay. */
-        boolean sameAs(FontRenderState state) {
-            return depthTestEnabled == state.depthTestEnabled && depthMask == state.depthMask
-                && depthFunc == state.depthFunc && polygonOffsetFillEnabled == state.polygonOffsetFillEnabled
-                && Float.compare(polygonOffsetFactor, state.polygonOffsetFactor) == 0
-                && Float.compare(polygonOffsetUnits, state.polygonOffsetUnits) == 0
-                && Float.compare(polygonOffsetClamp, state.polygonOffsetClamp) == 0;
-        }
-
-        /** Replays this segment's raster state before its deferred geometry is drawn. */
-        void apply() {
-            // GLSM owns state deduplication; skipping setters here drops commands during display-list compilation.
-            if (depthTestEnabled) GLStateManager.enableDepthTest(); else GLStateManager.disableDepthTest();
-            GLStateManager.glDepthFunc(depthFunc);
-            GLStateManager.glDepthMask(depthMask);
-
-            GLStateManager.glPolygonOffsetClamp(polygonOffsetFactor, polygonOffsetUnits, polygonOffsetClamp);
-            if (polygonOffsetFillEnabled) {
-                GLStateManager.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
-            } else {
-                GLStateManager.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
-            }
-        }
+    /** Seals text before a caller changes the effective raster state. */
+    private void captureDrawState() {
+        liveDrawState.captureLive();
+        if (liveDrawState.sameAs(drawState)) return;
+        sealBatchSegment();
+        drawState.set(liveDrawState);
     }
 
     private static final class TextSegment {
         final Matrix4f mvp = new Matrix4f();
         final Matrix4f modelView = new Matrix4f();
-        final FontRenderState renderState = new FontRenderState();
         BatchingFontRenderer owner;
         int cmdStart;
         int cmdEnd;
@@ -322,6 +265,7 @@ public class BatchingFontRenderer {
         int packedLight;
         float normalX, normalY, normalZ;
         int blockEntityId;
+        final TextDrawState drawState = new TextDrawState();
     }
 
     // 16-bit EBO index range
@@ -469,19 +413,6 @@ public class BatchingFontRenderer {
     private static final int LAYER_BACKGROUND = -1;
     private static final int LAYER_DEFAULT = 0;
 
-    /**
-     * FML's splash font renderer draws before the texture manager exists and binds its own
-     * font texture, so let it bind and read the id back.
-     */
-    private int textureFor(FontProvider fontProvider, char chr) {
-        if (fontProvider instanceof FontProviderCustom || Minecraft.getMinecraft().getTextureManager() != null) {
-            return fontProvider.getTexture(chr);
-        }
-        ((FontRendererAccessor) underlying).angelica$bindTexture(locationFontTexture);
-        return GLStateManager.getBoundTextureForServerState();
-    }
-
-    /** Queues an untextured or non-Unicode draw using the upstream texture ID path. */
     private void pushDrawCmd(int startIdx, int idxCount, int texture, boolean isUnicode) {
         pushDrawCmd(startIdx, idxCount, texture, isUnicode, LAYER_DEFAULT);
     }
@@ -630,13 +561,13 @@ public class BatchingFontRenderer {
         segment.lightmapU = lightmapU;
         segment.lightmapV = lightmapV;
         segment.lightmapTexture = lightmapTextureId;
-        segment.renderState.set(batchRenderState);
         segment.packedLight = lightmapPackedLight;
         final Vector3f normal = ShaderManager.getCurrentNormal();
         segment.normalX = normal.x;
         segment.normalY = normal.y;
         segment.normalZ = normal.z;
         segment.blockEntityId = CapturedRenderingState.INSTANCE.getCurrentRenderedBlockEntity();
+        segment.drawState.set(drawState);
         batchSegments.add(segment);
         batchSealedEnd = end;
     }
@@ -669,7 +600,8 @@ public class BatchingFontRenderer {
     /** Reports whether text should wait for the active TESR or model-part batch. */
     private static boolean shouldDeferNow() {
         if (!GLStateManager.isMainThread()) return false;
-        return TesrBatchRenderer.INSTANCE.hasPendingGeometry() || ModelPartBatcher.INSTANCE.isActive();
+        return (TesrBatchRenderer.INSTANCE.hasPendingGeometry() || ModelPartBatcher.INSTANCE.isActive())
+            && BatchDrawDefaults.drawsToPassFramebuffer();
     }
 
     public void beginDeferredBatch() {
@@ -779,8 +711,7 @@ public class BatchingFontRenderer {
 
                     GLStateManager.setModelViewMatrix(segment.modelView);
                     CapturedRenderingState.INSTANCE.setCurrentBlockEntity(segment.blockEntityId);
-
-                    segment.renderState.apply();
+                    segment.drawState.apply();
 
                     final FontDrawCmd[] cmdsData = owner.batchCommands.elements();
                     Arrays.sort(cmdsData, segment.cmdStart, segment.cmdEnd, FontDrawCmd.DRAW_ORDER_COMPARATOR);
@@ -807,7 +738,7 @@ public class BatchingFontRenderer {
         try {
             GLStateManager.glActiveTexture(GL13.GL_TEXTURE0);
             deferredSegments.get(0).owner.setupFontDrawState();
-            flushLastTexture = -1;
+            flushLastTexture = INVALID_TEXTURE;
             resetFlushLightmap();
             for (final TextSegment segment : deferredSegments) {
                 FLUSH_MVP.clear();
@@ -815,7 +746,7 @@ public class BatchingFontRenderer {
                 GLStateManager.glUniformMatrix4(segment.owner.mvpMatrixLocation, false, FLUSH_MVP);
                 uploadLightmap(segment.owner.lightmapLocation, segment.lightmapActive, segment.lightmapU,
                     segment.lightmapV, segment.lightmapTexture);
-                segment.renderState.apply();
+                segment.owner.applyDrawState(segment.drawState);
                 drawCommands(segment.owner.batchCommands.elements(), segment.cmdStart, segment.cmdEnd, segment.owner);
             }
         } finally {
@@ -824,6 +755,12 @@ public class BatchingFontRenderer {
             GLStateManager.popStateTo(d);
             discardDeferredText();
         }
+    }
+
+    /** Replays raster state and the font shader's matching alpha cutoff. */
+    private void applyDrawState(TextDrawState state) {
+        state.apply();
+        GLStateManager.glUniform1f(alphaTestRefLocation, state.alphaRef);
     }
 
     public static void discardDeferredText() {
@@ -949,7 +886,7 @@ public class BatchingFontRenderer {
         final int d = GLStateManager.pushState(StateSet.FONT);
         try {
             setupFontDrawState();
-            flushLastTexture = -1;
+            flushLastTexture = INVALID_TEXTURE;
             resetFlushLightmap();
             try {
                 for (int i = 0; i < segmentCount; i++) {
@@ -958,7 +895,7 @@ public class BatchingFontRenderer {
                     segment.mvp.get(FLUSH_MVP);
                     GLStateManager.glUniformMatrix4(mvpMatrixLocation, false, FLUSH_MVP);
                     uploadLightmap(lightmapLocation, segment.lightmapActive, segment.lightmapU, segment.lightmapV, segment.lightmapTexture);
-                    segment.renderState.apply();
+                    applyDrawState(segment.drawState);
                     drawCommands(cmds, segment.cmdStart, segment.cmdEnd, this);
                 }
                 if (batchSealedEnd < cmdCount) {
@@ -967,7 +904,7 @@ public class BatchingFontRenderer {
                     scratchMvp.get(FLUSH_MVP);
                     GLStateManager.glUniformMatrix4(mvpMatrixLocation, false, FLUSH_MVP);
                     uploadLightmap(lightmapLocation, lightmapActive, lightmapU, lightmapV, lightmapTextureId);
-                    batchRenderState.apply();
+                    applyDrawState(drawState);
                     drawCommands(cmds, batchSealedEnd, cmdCount, this);
                 }
             } finally {
@@ -1001,7 +938,6 @@ public class BatchingFontRenderer {
             fontBrightnessLast = FontConfig.fontBrightness;
             GLStateManager.glUniform1f(fontBrightness, 0.625f * FontConfig.fontBrightness + 0.1875f);
         }
-        GLStateManager.glUniform1f(alphaTestRefLocation, GLStateManager.getAlphaState().getReference());
         if (lightmapSamplerProgram != fontShaderId) {
             GLStateManager.glUniform1i(lightmapSamplerLocation, LIGHTMAP_TEX_UNIT);
             lightmapSamplerProgram = fontShaderId;
@@ -1100,8 +1036,8 @@ public class BatchingFontRenderer {
                 } else if (texture == 0) {
                     GLStateManager.glDisable(GL11.GL_TEXTURE_2D);
                 }
-                if (texture != 0) {
-                    GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, texture);
+                if (cmd.texture != 0) {
+                    bindIntTexture(owner, cmd.texture);
                 }
                 flushLastTexture = texture;
             }
@@ -1151,14 +1087,14 @@ public class BatchingFontRenderer {
                     if (segment.cmdStart == segment.cmdEnd) continue;
                     GLStateManager.setModelViewMatrix(segment.modelView);
                     CapturedRenderingState.INSTANCE.setCurrentBlockEntity(segment.blockEntityId);
-                    segment.renderState.apply();
+                    segment.drawState.apply();
                     emitRangeThroughPipeline(this, cmdsData, segment.cmdStart, segment.cmdEnd,
                         segment.packedLight, segment.normalX, segment.normalY, segment.normalZ);
                 }
                 if (batchSealedEnd < cmdCount) {
                     GLStateManager.setModelViewMatrix(scratchModelView);
                     CapturedRenderingState.INSTANCE.setCurrentBlockEntity(prevBlockEntityId);
-                    batchRenderState.apply();
+                    drawState.apply();
                     final Vector3f normal = ShaderManager.getCurrentNormal();
                     emitRangeThroughPipeline(this, cmdsData, batchSealedEnd, cmdCount,
                         lightmapPackedLight, normal.x, normal.y, normal.z);
@@ -1178,7 +1114,7 @@ public class BatchingFontRenderer {
     private static void emitRangeThroughPipeline(BatchingFontRenderer owner, FontDrawCmd[] cmdsData, int from, int to,
         int packedLight, float normalX, float normalY, float normalZ) {
         final Tessellator tessellator = Tessellator.instance;
-        int lastTexture = -1;
+        int lastTexture = INVALID_TEXTURE;
         boolean drawing = false;
         int discardedUnicodeCommands = 0;
         try {
@@ -1199,7 +1135,7 @@ public class BatchingFontRenderer {
                         GLStateManager.disableTexture();
                     } else {
                         GLStateManager.enableTexture();
-                        GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, texture);
+                        bindIntTexture(owner, cmd.texture);
                     }
                     lastTexture = texture;
                 }
@@ -1267,7 +1203,6 @@ public class BatchingFontRenderer {
         lightmapU = 0.0f;
         lightmapV = 0.0f;
         lightmapTextureId = 0;
-        batchRenderStateValid = false;
         lightmapPackedLight = -1;
     }
 
@@ -1400,8 +1335,9 @@ public class BatchingFontRenderer {
         FontProviderMC.get(this.isSGA).locationFontTexture = this.locationFontTexture;
 
         this.beginBatch();
-        this.captureSegmentState();
-        this.lightingFactorActive = FFPVertexLighting.modulatesVertexColor(this.lightingFactor);
+        this.captureLightmapState();
+        this.captureDrawState();
+        this.lightingFactorActive = isWorldSpaceText() && FFPVertexLighting.modulatesVertexColor(this.lightingFactor);
         float curX = anchorX;
         try {
             final int totalStringLength = string.length();
@@ -1706,7 +1642,7 @@ public class BatchingFontRenderer {
                 final int boldCopies = FontConfig.boldCopies;
                 final int texture = isUnicodeProvider
                     ? unicodeGlyph.textureId
-                    : isCustomProvider ? customGlyph.texture : textureFor(fontProvider, chr);
+                    : isCustomProvider ? customGlyph.texture : fontProvider.getTexture(chr);
                 if (isUnicodeProvider && texture == 0) {
                     curX += (xAdvance + (curBold ? 1.0f : 0.0f)) + getGlyphSpacing();
                     if (bookMode) { curX = (int) curX; }

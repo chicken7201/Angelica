@@ -45,7 +45,7 @@ public class GLSM_StateSet_GLTest {
     private static final String TRIVIAL_VS = "#version 330 core\nvoid main(){ gl_Position = vec4(0.0); }\n";
     private static final String TRIVIAL_FS = "#version 330 core\nout vec4 o;\nvoid main(){ o = vec4(1.0); }\n";
 
-    private static int linkTrivialProgram() {
+    static int linkTrivialProgram() {
         final int v = compileShader(GL20.GL_VERTEX_SHADER, TRIVIAL_VS);
         final int f = compileShader(GL20.GL_FRAGMENT_SHADER, TRIVIAL_FS);
         final int p = GL20.glCreateProgram();
@@ -88,37 +88,43 @@ public class GLSM_StateSet_GLTest {
         }
     }
 
-    /** Verifies the font scope restores glyphfix polygon state without capturing unrelated cull enablement. */
+    /** Verifies the font scope restores glyphfix polygon state without capturing unrelated stencil enablement. */
     @Test
-    void fontRestoresDepthShadeAndPolygonButNotCullEnable() {
+    void fontRestoresDepthAxisShadeModelAndPolygonOffsetButNotStencil() {
         try {
             GLStateManager.enableDepthTest();
             GLStateManager.glDepthFunc(GL11.GL_LEQUAL);
             GLStateManager.glShadeModel(GL11.GL_SMOOTH);
-            GLStateManager.enableCull();
-            GLStateManager.glCullFace(GL11.GL_BACK);
+            GLStateManager.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
+            GLStateManager.glPolygonOffset(0.0f, 0.0f);
+            GLStateManager.glEnable(GL11.GL_STENCIL_TEST);
 
             final int d = GLStateManager.pushState(StateSet.FONT);
             GLStateManager.disableDepthTest();
             GLStateManager.glDepthFunc(GL11.GL_ALWAYS);
             GLStateManager.glShadeModel(GL11.GL_FLAT);
-            GLStateManager.disableCull();
-            GLStateManager.glCullFace(GL11.GL_FRONT);
+            GLStateManager.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
+            GLStateManager.glPolygonOffset(-10.0f, -10.0f);
+            GLStateManager.glDisable(GL11.GL_STENCIL_TEST);
             GLStateManager.popStateTo(d);
 
             verifyIsEnabled(GL11.GL_DEPTH_TEST, true, "Depth test enable - restored by FONT pop");
             assertEquals(GL11.GL_LEQUAL, GLStateManager.getDepthState().getFunc(), "cache depth func");
             assertEquals(GL11.GL_LEQUAL, GL11.glGetInteger(GL11.GL_DEPTH_FUNC), "driver depth func");
             assertEquals(GL11.GL_SMOOTH, GLStateManager.getShadeModelState().getValue(), "cache shade model");
-            assertEquals(GL11.GL_BACK, GLStateManager.getPolygonState().getCullFaceMode(), "cache polygon state restored by FONT pop");
-            assertEquals(GL11.GL_BACK, GL11.glGetInteger(GL11.GL_CULL_FACE_MODE), "driver polygon state restored by FONT pop");
-            verifyIsEnabled(GL11.GL_CULL_FACE, false, "Cull enable - not a FONT member, must stay toggled");
+            verifyIsEnabled(GL11.GL_POLYGON_OFFSET_FILL, false, "Polygon offset fill - restored by FONT pop");
+            assertEquals(0.0f, GLStateManager.getPolygonState().getOffsetFactor(), "cache polygon offset factor");
+            assertEquals(0.0f, GL11.glGetFloat(GL11.GL_POLYGON_OFFSET_FACTOR), "driver polygon offset factor");
+            assertEquals(0.0f, GLStateManager.getPolygonState().getOffsetUnits(), "cache polygon offset units");
+            assertEquals(0.0f, GL11.glGetFloat(GL11.GL_POLYGON_OFFSET_UNITS), "driver polygon offset units");
+            verifyIsEnabled(GL11.GL_STENCIL_TEST, false, "Stencil test - not a FONT member, must stay toggled");
         } finally {
             GLStateManager.disableDepthTest();
             GLStateManager.glDepthFunc(GL11.GL_LESS);
             GLStateManager.glShadeModel(GL11.GL_SMOOTH);
-            GLStateManager.disableCull();
-            GLStateManager.glCullFace(GL11.GL_BACK);
+            GLStateManager.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
+            GLStateManager.glPolygonOffset(0.0f, 0.0f);
+            GLStateManager.glDisable(GL11.GL_STENCIL_TEST);
         }
     }
 

@@ -27,16 +27,16 @@ class FontRenderStateGLTest {
         GLStateManager.glDepthMask(true);
         GLStateManager.glPolygonOffset(-10.0f, -10.0f);
         GLStateManager.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
-        final BatchingFontRenderer.FontRenderState captured = new BatchingFontRenderer.FontRenderState();
-        captured.capture();
-        final BatchingFontRenderer.FontRenderState replayed = new BatchingFontRenderer.FontRenderState();
+        final TextDrawState captured = new TextDrawState();
+        captured.captureLive();
+        final TextDrawState replayed = new TextDrawState();
         final int initialDepth = GLStateManager.getAttribDepth();
         final int list = GLStateManager.glGenLists(1);
         try {
             GLStateManager.glNewList(list, execute ? GL11.GL_COMPILE_AND_EXECUTE : GL11.GL_COMPILE);
             final int depth = GLStateManager.pushState(pipeline ? StateSet.FONT_PIPELINE : StateSet.FONT);
             captured.apply();
-            DisplayListManager.recordComplexCommand(replayed::capture);
+            DisplayListManager.recordComplexCommand(replayed::captureLive);
             GLStateManager.popStateTo(depth);
             GLStateManager.glEndList();
             assertEquals(initialDepth, GLStateManager.getAttribDepth(), "balanced compilation scope");
@@ -46,14 +46,14 @@ class FontRenderStateGLTest {
             GLStateManager.glDepthMask(false);
             GLStateManager.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
             GLStateManager.glPolygonOffset(1.0f, 2.0f);
-            final BatchingFontRenderer.FontRenderState caller = new BatchingFontRenderer.FontRenderState();
-            caller.capture();
+            final TextDrawState caller = new TextDrawState();
+            caller.captureLive();
 
             for (int replay = 0; replay < 2; replay++) {
                 GLStateManager.glCallList(list);
                 assertTrue(captured.sameAs(replayed), "compiled segment raster state");
-                final BatchingFontRenderer.FontRenderState restored = new BatchingFontRenderer.FontRenderState();
-                restored.capture();
+                final TextDrawState restored = new TextDrawState();
+                restored.captureLive();
                 assertTrue(caller.sameAs(restored), "caller state after list replay");
                 assertEquals(initialDepth, GLStateManager.getAttribDepth(), "balanced replay scope");
                 assertFalse(GL11.glIsEnabled(GL11.GL_DEPTH_TEST), "driver depth test");
@@ -79,37 +79,37 @@ class FontRenderStateGLTest {
         GLStateManager.glDepthMask(true);
         GLStateManager.glPolygonOffset(-10.0f, -10.0f);
         GLStateManager.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
-        final BatchingFontRenderer.FontRenderState first = new BatchingFontRenderer.FontRenderState();
-        first.capture();
+        final TextDrawState first = new TextDrawState();
+        first.captureLive();
 
         GLStateManager.glDepthFunc(GL11.GL_GREATER);
         GLStateManager.glPolygonOffset(-2.0f, -3.0f);
-        final BatchingFontRenderer.FontRenderState second = new BatchingFontRenderer.FontRenderState();
-        second.capture();
+        final TextDrawState second = new TextDrawState();
+        second.captureLive();
 
         GLStateManager.disableDepthTest();
         GLStateManager.glDepthFunc(GL11.GL_ALWAYS);
         GLStateManager.glDepthMask(false);
         GLStateManager.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
         GLStateManager.glPolygonOffset(1.0f, 2.0f);
-        final BatchingFontRenderer.FontRenderState caller = new BatchingFontRenderer.FontRenderState();
-        caller.capture();
+        final TextDrawState caller = new TextDrawState();
+        caller.captureLive();
 
         final int depth = GLStateManager.pushState(pipeline ? StateSet.FONT_PIPELINE : StateSet.FONT);
         try {
             first.apply();
-            final BatchingFontRenderer.FontRenderState replayed = new BatchingFontRenderer.FontRenderState();
-            replayed.capture();
+            final TextDrawState replayed = new TextDrawState();
+            replayed.captureLive();
             assertTrue(first.sameAs(replayed), "first segment raster state");
             second.apply();
-            replayed.capture();
+            replayed.captureLive();
             assertTrue(second.sameAs(replayed), "second segment raster state");
         } finally {
             GLStateManager.popStateTo(depth);
         }
 
-        final BatchingFontRenderer.FontRenderState restored = new BatchingFontRenderer.FontRenderState();
-        restored.capture();
+        final TextDrawState restored = new TextDrawState();
+        restored.captureLive();
         assertTrue(caller.sameAs(restored), "caller raster state after scope exit");
         assertFalse(GLStateManager.getDepthTest().isEffectivelyEnabled(), "caller depth test");
         assertFalse(GLStateManager.getPolygonOffsetFillState().isEffectivelyEnabled(), "caller polygon offset");
@@ -140,8 +140,8 @@ class FontRenderStateGLTest {
         GLStateManager.glPolygonOffset(-10.0f, -10.0f);
         GLStateManager.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
 
-        final BatchingFontRenderer.FontRenderState captured = new BatchingFontRenderer.FontRenderState();
-        captured.capture();
+        final TextDrawState captured = new TextDrawState();
+        captured.captureLive();
 
         GLStateManager.disableDepthTest();
         GLStateManager.glDepthFunc(GL11.GL_ALWAYS);
