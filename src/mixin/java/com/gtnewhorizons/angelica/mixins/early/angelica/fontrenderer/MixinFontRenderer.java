@@ -117,6 +117,12 @@ public abstract class MixinFontRenderer implements FontRendererAccessor, IFontPa
     @Unique
     public BatchingFontRenderer angelica$batcher;
 
+    /** Exposes the owning manager before Minecraft installs its global TextureManager. */
+    @Override
+    public TextureManager angelica$getTextureManager() {
+        return this.renderEngine;
+    }
+
     @Inject(method = "<init>", at = @At("TAIL"))
     private void angelica$injectBatcher(GameSettings settings, ResourceLocation fontLocation, TextureManager texManager,
         boolean unicodeMode, CallbackInfo ci) {

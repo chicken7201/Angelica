@@ -41,6 +41,8 @@ public final class FontProviderCustom implements FontProvider {
     /** Creates a CPU metric cache with textures deferred until drawing. */
     FontProviderCustom(Font font) {
         this.font = font;
+        if (LoadingFontDiagnostics.ENABLED) LoadingFontDiagnostics.event("CUSTOM_PROVIDER_CREATED",
+            "provider=" + LoadingFontDiagnostics.identity(this) + " font=" + font);
     }
 
     /** Resolves the configured font at the requested raster quality. */
@@ -68,17 +70,25 @@ public final class FontProviderCustom implements FontProvider {
 
     /** Invalidates CPU metrics and retires textures when the selected font changes. */
     public void setFont(Font font) {
+        final Font previous = this.font;
         synchronized (this) {
             this.font = font;
             Arrays.fill(this.fontAtlases, null);
         }
 
+        int deleted = 0;
         for (int i = 0; i < ATLAS_COUNT; i++) {
             if (this.atlasTextures[i] != 0) {
+                if (LoadingFontDiagnostics.ENABLED) LoadingFontDiagnostics.event("CUSTOM_TEXTURE_DELETE",
+                    "provider=" + LoadingFontDiagnostics.identity(this) + " atlas=" + i + " texture=" + this.atlasTextures[i]);
                 GLStateManager.glDeleteTextures(this.atlasTextures[i]);
                 this.atlasTextures[i] = 0;
+                deleted++;
             }
         }
+        if (LoadingFontDiagnostics.ENABLED) LoadingFontDiagnostics.event("CUSTOM_PROVIDER_RESET",
+            "provider=" + LoadingFontDiagnostics.identity(this) + " oldFont=" + previous + " newFont=" + font
+                + " deletedTextures=" + deleted);
     }
 
     /** Reloads a selected font at the configured raster quality. */
@@ -309,6 +319,10 @@ public final class FontProviderCustom implements FontProvider {
         if (image == null) return 0;
         final int texture = uploadAtlas(image);
         this.atlasTextures[id] = texture;
+        if (LoadingFontDiagnostics.ENABLED) LoadingFontDiagnostics.event("CUSTOM_TEXTURE_CREATE",
+            "provider=" + LoadingFontDiagnostics.identity(this) + " atlas=" + id + " texture=" + texture
+                + " size=" + image.getWidth() + 'x' + image.getHeight()
+                + " context=" + LoadingFontDiagnostics.identity(GLStateManager.ctx()));
         return texture;
     }
 

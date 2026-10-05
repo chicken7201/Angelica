@@ -49,6 +49,7 @@ public enum Mixins implements IMixins {
             , "angelica.MixinMinecraft_IconifyGuard"
             , "angelica.MixinMinecraftServer"
             , "angelica.MixinSimpleReloadableResourceManager"
+            , "angelica.bugfixes.MixinCrashReportCategory_SourceFile"
             , "angelica.bugfixes.MixinItemRenderer_EdgeDepth"
             , "angelica.bugfixes.MixinModelCreeper_AuraBodyInflate"
             , "angelica.bugfixes.MixinModelSkeleton_LegPelvisZFight"
@@ -151,6 +152,16 @@ public enum Mixins implements IMixins {
             "angelica.fontrenderer.MixinGuiIngameForge"
             , "angelica.fontrenderer.MixinFontRenderer"
             , "angelica.fontrenderer.MixinTextureManager"
+        )
+    ),
+
+    ANGELICA_LOADING_FONT_DIAGNOSTICS(new MixinBuilder()
+        .setPhase(Phase.EARLY)
+        .setApplyIf(() -> AngelicaConfig.enableFontRenderer && Boolean.getBoolean("angelica.debug.loadingFonts"))
+        .addClientMixins(
+            "angelica.fontrenderer.MixinFontRendererDiagnostics",
+            "angelica.fontrenderer.MixinMinecraftDisplayerDiagnostics",
+            "angelica.fontrenderer.MixinCrashReportStartupDiagnostics"
         )
     ),
 

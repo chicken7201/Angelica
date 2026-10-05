@@ -48,6 +48,8 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
     /** Registers this provider; the reloadable manager immediately supplies the initial resources. */
     private FontProviderUnicode() {
         initializePageCreationLocks();
+        if (LoadingFontDiagnostics.ENABLED) LoadingFontDiagnostics.event("UNICODE_PROVIDER_CREATED",
+            "provider=" + LoadingFontDiagnostics.identity(this));
         ((IReloadableResourceManager) Minecraft.getMinecraft().getResourceManager()).registerReloadListener(this);
     }
 
@@ -101,6 +103,10 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
             if (locked) GLStateManager.releaseDrawLock();
         }
 
+        if (LoadingFontDiagnostics.ENABLED) LoadingFontDiagnostics.event("UNICODE_GENERATION_CHANGED",
+            "provider=" + LoadingFontDiagnostics.identity(this) + " manager=" + LoadingFontDiagnostics.identity(resourceManager)
+                + " oldGeneration=" + previousGeneration + " generation=" + this.resourceGeneration
+                + " retiredPages=" + retiredCount);
         LOGGER.debug(
             "Resource reload generation changed: old={}, new={}, thread={}",
             previousGeneration,
@@ -299,7 +305,7 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
     }
 
     /** Uploads a current CPU page from a valid render context and returns its registered dynamic location. */
-    private ResourceLocation ensurePageTexture(LoadedPage page) {
+    private ResourceLocation ensurePageTexture(LoadedPage page, TextureManager rendererTextures) {
         if (page == null || page.metrics == null) {
             return null;
         }
@@ -333,8 +339,8 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
         final boolean locked = GLStateManager.acquireDrawLock();
         try {
             synchronized (this.pageStateLock) {
-                final TextureManager textureManager = Minecraft.getMinecraft().getTextureManager();
-                clearRetiredPages(textureManager);
+                final TextureManager textureManager = resolveTextureManager(rendererTextures);
+                clearRetiredPages();
                 return ensurePageTextureLocked(page, textureManager);
             }
         } finally {
@@ -345,7 +351,7 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
 
     /** Registers or repairs one page while the lifecycle, draw, and page-state locks are held. */
     private ResourceLocation ensurePageTextureLocked(LoadedPage page, TextureManager textureManager) {
-        if (!isCurrentPageLocked(page)) {
+        if (!isCurrentPageLocked(page) || textureManager == null) {
             return null;
         }
 
@@ -355,11 +361,18 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
                 pageLabel(page.pageIndex),
                 page.generation,
                 Thread.currentThread().getName());
-            page.dynamicTexture = withPageTextureBindingPreserved(() -> new DynamicTexture(page.image));
+            if (page.dynamicTexture == null) {
+                page.dynamicTexture = withPageTextureBindingPreserved(() -> new DynamicTexture(page.image));
+            }
             page.texture = textureManager.getDynamicTextureLocation(
-                String.format("angelica_unicode_page_%02x", page.pageIndex),
+                String.format("angelica_unicode_page_%02x_g%d", page.pageIndex, page.generation),
                 page.dynamicTexture);
             page.image = null;
+            if (LoadingFontDiagnostics.ENABLED) LoadingFontDiagnostics.event("UNICODE_TEXTURE_CREATE",
+                "provider=" + LoadingFontDiagnostics.identity(this) + " page=" + pageLabel(page.pageIndex)
+                    + " generation=" + page.generation + " location=" + page.texture
+                    + " texture=" + page.dynamicTexture.glTextureId
+                    + " textures=" + LoadingFontDiagnostics.identity(textureManager));
             LOGGER.debug(
                 "Dynamic texture registration completed: page={}, location={}, generation={}, thread={}, registered={}",
                 pageLabel(page.pageIndex),
@@ -371,6 +384,7 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
             || page.dynamicTexture.glTextureId == -1) {
             final boolean registrationMissing = textureManager.getTexture(page.texture) != page.dynamicTexture;
             final boolean uploadMissing = page.dynamicTexture.glTextureId == -1;
+            final int previousTextureId = page.dynamicTexture.glTextureId;
             if (!page.missingRegistrationLogged) {
                 page.missingRegistrationLogged = true;
                 LOGGER.debug(
@@ -391,6 +405,10 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
             if (registrationMissing) {
                 textureManager.loadTexture(page.texture, page.dynamicTexture);
             }
+            if (LoadingFontDiagnostics.ENABLED) LoadingFontDiagnostics.event("UNICODE_TEXTURE_REPAIR",
+                "page=" + pageLabel(page.pageIndex) + " generation=" + page.generation + " location=" + page.texture
+                    + " previousTexture=" + previousTextureId + " texture=" + page.dynamicTexture.glTextureId
+                    + " registrationMissing=" + registrationMissing + " uploadMissing=" + uploadMissing);
             LOGGER.debug(
                 "Dynamic texture registration completed: page={}, location={}, generation={}, thread={}, recreated=true, reuploaded={}",
                 pageLabel(page.pageIndex),
@@ -403,8 +421,33 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
         if (textureManager.getTexture(page.texture) != page.dynamicTexture) {
             return null;
         }
+        if (page.textureManager != textureManager) {
+            final TextureManager previousManager = page.textureManager;
+            unregisterPageTexture(page);
+            page.textureManager = textureManager;
+            if (LoadingFontDiagnostics.ENABLED) LoadingFontDiagnostics.event("UNICODE_TEXTURE_MANAGER_CHANGED",
+                "page=" + pageLabel(page.pageIndex) + " generation=" + page.generation + " location=" + page.texture
+                    + " previous=" + LoadingFontDiagnostics.identity(previousManager)
+                    + " textures=" + LoadingFontDiagnostics.identity(textureManager)
+                    + " texture=" + page.dynamicTexture.glTextureId);
+        }
         this.texturePages.put(page.texture, page);
         return page.texture;
+    }
+
+    /** Uses the normal global manager when available and the renderer's private manager during startup. */
+    private static TextureManager resolveTextureManager(TextureManager rendererTextures) {
+        final Minecraft minecraft = Minecraft.getMinecraft();
+        final TextureManager minecraftTextures = minecraft == null ? null : minecraft.getTextureManager();
+        return minecraftTextures == null ? rendererTextures : minecraftTextures;
+    }
+
+    /** Removes only this page's registration from the manager that actually owns it, without deleting its GL ID. */
+    private static void unregisterPageTexture(LoadedPage page) {
+        if (page.textureManager != null && page.texture != null
+            && page.textureManager.getTexture(page.texture) == page.dynamicTexture) {
+            page.textureManager.mapTextureObjects.remove(page.texture);
+        }
     }
 
     /** Keeps a lazy Unicode page upload from replacing the texture bound by the caller before font state is saved. */
@@ -420,17 +463,18 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
     }
 
     /** Removes retired dynamic pages only while no font draw can use their old generation. */
-    private void clearRetiredPages(TextureManager textureManager) {
+    private void clearRetiredPages() {
         if (this.retiredPages.isEmpty()) {
             return;
         }
 
         int cleared = 0;
         for (LoadedPage page : this.retiredPages) {
-            if (page.texture != null && page.dynamicTexture != null) {
-                if (textureManager.getTexture(page.texture) == page.dynamicTexture) {
-                    textureManager.mapTextureObjects.remove(page.texture);
-                }
+            if (page.dynamicTexture != null) {
+                unregisterPageTexture(page);
+                if (LoadingFontDiagnostics.ENABLED) LoadingFontDiagnostics.event("UNICODE_TEXTURE_DELETE",
+                    "page=" + pageLabel(page.pageIndex) + " generation=" + page.generation + " location=" + page.texture
+                        + " texture=" + page.dynamicTexture.glTextureId);
                 page.dynamicTexture.deleteGlTexture();
             }
             cleared++;
@@ -467,6 +511,11 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
 
     /** Returns an immutable rendering snapshot so reload cannot mix metrics from different page generations. */
     GlyphRenderInfo getRenderInfo(char chr) {
+        return getRenderInfo(chr, null);
+    }
+
+    /** Builds a glyph snapshot using the owning renderer's manager when global startup resources are absent. */
+    GlyphRenderInfo getRenderInfo(char chr, TextureManager rendererTextures) {
         if (Character.isSurrogate(chr)) {
             return null;
         }
@@ -486,7 +535,7 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
             }
 
             final boolean customGlyph = FontGlyphRanges.isGtnhPrivateUseGlyph(chr);
-            final ResourceLocation texture = ensurePageTexture(page);
+            final ResourceLocation texture = ensurePageTexture(page, rendererTextures);
             if (texture == null && !isCurrentPage(page)) {
                 continue;
             }
@@ -510,6 +559,11 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
 
     /** Validates or repairs a current Unicode texture and returns its directly bindable OpenGL ID. */
     int prepareTextureForBind(ResourceLocation location) {
+        return prepareTextureForBind(location, null);
+    }
+
+    /** Validates the current page using the same manager fallback as the glyph geometry path. */
+    int prepareTextureForBind(ResourceLocation location, TextureManager rendererTextures) {
         if (location == null || !hasCurrentGlContext() || !UnicodeTextureLifecycle.tryBeginTextureUse()) {
             return -1;
         }
@@ -517,8 +571,8 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
         final boolean locked = GLStateManager.acquireDrawLock();
         try {
             synchronized (this.pageStateLock) {
-                final TextureManager textureManager = Minecraft.getMinecraft().getTextureManager();
-                clearRetiredPages(textureManager);
+                final TextureManager textureManager = resolveTextureManager(rendererTextures);
+                clearRetiredPages();
                 final LoadedPage page = this.texturePages.get(location);
                 if (page == null || !isCurrentPageLocked(page)
                     || ensurePageTextureLocked(page, textureManager) == null || page.dynamicTexture == null) {
@@ -754,6 +808,7 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
         private BufferedImage image;
         private DynamicTexture dynamicTexture;
         private ResourceLocation texture;
+        private TextureManager textureManager;
         private boolean cacheHitLogged;
         private boolean wrongThreadLogged;
         private boolean reloadDeferredLogged;

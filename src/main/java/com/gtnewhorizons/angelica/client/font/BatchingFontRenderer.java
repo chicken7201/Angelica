@@ -1,5 +1,7 @@
 package com.gtnewhorizons.angelica.client.font;
 
+import com.gtnewhorizons.angelica.mixins.interfaces.FontRendererAccessor;
+
 import com.google.common.collect.ImmutableSet;
 import com.gtnewhorizon.gtnhlib.client.renderer.vao.IndexBuffer;
 import com.gtnewhorizon.gtnhlib.util.font.FontRendering;
@@ -92,6 +94,8 @@ public class BatchingFontRenderer {
 
     final boolean isSGA;
     final boolean isSplash;
+    private final LoadingFontDiagnostics.RenderTrace loadingTrace = LoadingFontDiagnostics.ENABLED
+        ? new LoadingFontDiagnostics.RenderTrace() : null;
 
     /** For use with modded books. Affects calculations and forces some defaults. */
     @Setter
@@ -111,6 +115,7 @@ public class BatchingFontRenderer {
         }
     }
 
+    /** Initializes batching and the shared font resources for this renderer. */
     public BatchingFontRenderer(FontRenderer underlying, int[] charWidth, int[] colorCode, ResourceLocation locationFontTexture) {
         this.underlying = underlying;
         this.charWidth = charWidth;
@@ -140,6 +145,10 @@ public class BatchingFontRenderer {
             vbo = GLStateManager.glGenBuffers();
             allocateBuffers();
         }
+        if (LoadingFontDiagnostics.ENABLED) LoadingFontDiagnostics.event("BATCHER_CREATED",
+            "renderer=" + LoadingFontDiagnostics.identity(underlying) + " batcher=" + LoadingFontDiagnostics.identity(this)
+                + " isSplash=" + isSplash + " shader=" + fontShaderId + " vbo=" + vbo
+                + " context=" + LoadingFontDiagnostics.identity(GLStateManager.ctx()));
     }
 
     // === Batched rendering
@@ -809,6 +818,7 @@ public class BatchingFontRenderer {
         final int unicodeCommands = countUnicodeCommands();
         if (unicodeCommands > 0 && !UnicodeTextureLifecycle.tryBeginTextureUse()) {
             truncateBatchToWatermark();
+            if (loadingTrace != null) loadingTrace.outcome("BATCH_BLOCKED", "reason=texture_manager_reload");
             FontProviderUnicode.get().logDiscardedBatch(unicodeCommands);
             return;
         }
@@ -1017,11 +1027,13 @@ public class BatchingFontRenderer {
     /** Draws a command range after validating Unicode texture bindings against resource reloads. */
     private static void drawCommands(FontDrawCmd[] cmdsData, int from, int to, BatchingFontRenderer owner) {
         int discardedUnicodeCommands = 0;
+        int submittedCommands = 0;
         for (int i = from; i < to; i++) {
             final FontDrawCmd cmd = cmdsData[i];
             final int unicodeTextureId;
             if (cmd.isUnicode) {
-                unicodeTextureId = FontProviderUnicode.get().prepareTextureForBind(cmd.unicodeTexture);
+                unicodeTextureId = FontProviderUnicode.get().prepareTextureForBind(cmd.unicodeTexture,
+                    ((FontRendererAccessor) owner.underlying).angelica$getTextureManager());
                 if (unicodeTextureId == -1) {
                     discardedUnicodeCommands++;
                     continue;
@@ -1038,14 +1050,20 @@ public class BatchingFontRenderer {
                 }
                 if (cmd.texture != 0) {
                     bindIntTexture(owner, cmd.texture);
+                    if (owner.loadingTrace != null) owner.loadingTrace.texture(cmd.texture,
+                        cmd.isUnicode ? unicodeTextureId : GLStateManager.getBoundTextureForServerState(), cmd.isUnicode);
                 }
                 flushLastTexture = texture;
             }
             GLStateManager.glDrawElements(GL11.GL_TRIANGLES, cmd.idxCount, GL11.GL_UNSIGNED_SHORT, (long) cmd.startVtx * 2L);
+            submittedCommands++;
         }
         if (discardedUnicodeCommands > 0) {
             FontProviderUnicode.get().logDiscardedBatch(discardedUnicodeCommands);
         }
+        if (owner.loadingTrace != null && to > from) owner.loadingTrace.outcome(
+            submittedCommands == 0 ? "BATCH_BLOCKED" : discardedUnicodeCommands > 0 ? "BATCH_PARTIAL" : "BATCH_SUBMITTED",
+            "commands=" + (to - from) + " submitted=" + submittedCommands + " discardedUnicode=" + discardedUnicodeCommands);
     }
 
     /** Replays the current text batch through Iris while preserving the optimized path's batching boundaries. */
@@ -1121,7 +1139,8 @@ public class BatchingFontRenderer {
             for (int i = from; i < to; i++) {
                 final FontDrawCmd cmd = cmdsData[i];
                 final int texture = cmd.isUnicode
-                    ? FontProviderUnicode.get().prepareTextureForBind(cmd.unicodeTexture) : cmd.texture;
+                    ? FontProviderUnicode.get().prepareTextureForBind(cmd.unicodeTexture,
+                        ((FontRendererAccessor) owner.underlying).angelica$getTextureManager()) : cmd.texture;
                 if (texture == -1) {
                     discardedUnicodeCommands++;
                     continue;
@@ -1337,6 +1356,7 @@ public class BatchingFontRenderer {
         this.beginBatch();
         this.captureLightmapState();
         this.captureDrawState();
+        final boolean diagnose = loadingTrace != null && loadingTrace.begin(this, unicodeFlag, fontShaderId);
         this.lightingFactorActive = isWorldSpaceText() && FFPVertexLighting.modulatesVertexColor(this.lightingFactor);
         float curX = anchorX;
         try {
@@ -1566,10 +1586,12 @@ public class BatchingFontRenderer {
                 }
 
                 final boolean isUnicodeProvider = fontProvider instanceof FontProviderUnicode;
+                if (diagnose) loadingTrace.provider(fontProvider);
                 final FontProviderUnicode.GlyphRenderInfo unicodeGlyph;
                 final FontProviderCustom.GlyphRenderInfo customGlyph;
                 if (isUnicodeProvider) {
-                    unicodeGlyph = ((FontProviderUnicode) fontProvider).getRenderInfo(chr);
+                    unicodeGlyph = ((FontProviderUnicode) fontProvider).getRenderInfo(chr,
+                        ((FontRendererAccessor) underlying).angelica$getTextureManager());
                     customGlyph = null;
                     if (unicodeGlyph == null) {
                         continue;
@@ -1739,6 +1761,7 @@ public class BatchingFontRenderer {
                 final int vtxCount = 4 * charCount;
                 pushDrawCmd(idxId, vtxCount / 2 * 3, texture, isUnicodeProvider, LAYER_DEFAULT,
                     isUnicodeProvider ? unicodeGlyph.texture : null);
+                if (diagnose) loadingTrace.generatedGlyph();
 
                 curX += (xAdvance + (curBold ? 1.0f : 0.0f)) + getGlyphSpacing();
                 if (bookMode) { curX = (int) curX; }
@@ -1778,8 +1801,18 @@ public class BatchingFontRenderer {
                 pushDrawCmd(ulIdx, 6, 0, false);
             }
 
+        } catch (RuntimeException failure) {
+            if (diagnose) loadingTrace.failure(failure);
+            throw failure;
         } finally {
-            this.endBatch();
+            try {
+                this.endBatch();
+            } catch (RuntimeException failure) {
+                if (diagnose) loadingTrace.failure(failure);
+                throw failure;
+            } finally {
+                if (diagnose) loadingTrace.finish();
+            }
         }
         return curX + (enableShadow ? 1.0f : 0.0f);
     }
