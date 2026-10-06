@@ -3,29 +3,33 @@ package net.coderbot.iris.uniforms;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.StateSet;
 import net.coderbot.iris.Iris;
-import net.coderbot.iris.layer.GbufferPrograms;
 import net.coderbot.iris.pipeline.DeferredWorldRenderingPipeline;
 import net.coderbot.iris.pipeline.WorldRenderingPipeline;
 import net.minecraft.block.Block;
 import net.minecraft.item.ItemStack;
+import org.lwjgl.opengl.GL11;
 
 /**
  * Helper class to manage the currentRenderedItem ID uniform.
  */
 public class ItemIdManager {
+    /** Saves the caller's item identity before a nested render. */
     public static void pushItemId() {
         CapturedRenderingState.INSTANCE.pushCurrentRenderedItem();
     }
 
+    /** Restores the item identity saved by the enclosing render. */
     public static void popItemId() {
         CapturedRenderingState.INSTANCE.popCurrentRenderedItem();
     }
 
+    /** Applies item alpha testing while preserving the caller's world or HUD lightmap state. */
     public static int beginCutout(ItemStack stack) {
         pushItemId();
         final int depth = GLStateManager.pushState(StateSet.CUTOUT);
         try {
-            GbufferPrograms.setCutoutDefaults();
+            GLStateManager.enableAlphaTest();
+            GLStateManager.glAlphaFunc(GL11.GL_GREATER, 0.1F);
             setItemId(stack);
         } catch (Throwable t) {
             endCutout(depth);
@@ -34,6 +38,7 @@ public class ItemIdManager {
         return depth;
     }
 
+    /** Restores the item identity and GL state at the saved cutout depth. */
     public static void endCutout(int depth) {
         popItemId();
         GLStateManager.popStateTo(depth);
@@ -79,11 +84,7 @@ public class ItemIdManager {
         CapturedRenderingState.INSTANCE.setCurrentRenderedItem(id);
     }
 
-    /**
-     * Honestly I don't know why there's comments on a lot of these.
-     * Guess I thought documentation is good but man if you can't figure this out
-     * you're in trouble.
-     */
+    /** Reports whether an Iris shader pipeline is currently drawing world geometry. */
     public static boolean isWorldRenderActive() {
         final WorldRenderingPipeline pipeline = Iris.getPipelineManager().getPipelineNullable();
         return pipeline instanceof DeferredWorldRenderingPipeline drp && drp.isRenderingLevelGeometry();
