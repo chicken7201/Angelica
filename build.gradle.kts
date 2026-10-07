@@ -6,6 +6,8 @@ plugins {
     id("com.gtnewhorizons.gtnhconvention")
 }
 
+apply(from = "gradle/mod-version.gradle.kts")
+
 val lwjglDebug = false
 val gpuHud = false
 val renderdoc = false
@@ -143,6 +145,17 @@ fun Test.configureAngelicaJava8() {
     dependsOn(swaps.values)
     for ((original, downgrade) in swaps) {
         classpath = classpath.minus(original).plus(downgraded(downgrade))
+    }
+}
+
+if (isMacOs && providers.gradleProperty("clientJvmVendor").isPresent) {
+    for (javaVersion in listOf(17, 21, 25)) {
+        tasks.named<JavaExec>("runClient$javaVersion") {
+            javaLauncher = javaToolchains.launcherFor {
+                languageVersion = JavaLanguageVersion.of(javaVersion)
+                vendor = JvmVendorSpec.matching(providers.gradleProperty("clientJvmVendor").get())
+            }
+        }
     }
 }
 

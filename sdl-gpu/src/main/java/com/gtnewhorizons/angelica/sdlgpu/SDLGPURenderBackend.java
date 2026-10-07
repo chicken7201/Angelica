@@ -1,14 +1,17 @@
 package com.gtnewhorizons.angelica.sdlgpu;
 
 import com.gtnewhorizons.angelica.glsm.hooks.GLSMHooks;
+import com.gtnewhorizons.angelica.sdlgpu.compute.VertexWriteReplayer;
 import com.gtnewhorizons.angelica.sdlgpu.compute.VoxelizationDispatcher;
 import com.gtnewhorizons.angelica.config.SystemProperties;
 import com.gtnewhorizons.angelica.glsm.CaptureGate;
 import com.gtnewhorizons.angelica.glsm.GLContextState;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.profiling.Tracy;
+import com.gtnewhorizons.angelica.glsm.backend.BackendOptions;
 import com.gtnewhorizons.angelica.glsm.backend.GLDebugMessageListener;
 import com.gtnewhorizons.angelica.glsm.backend.MainThreadPump;
+import com.gtnewhorizons.angelica.glsm.backend.VertexWriteReplaySetup;
 import me.eigenraven.lwjgl3ify.client.MainThreadExec;
 import org.lwjglx.Lwjgl3ifyEventLoop;
 import com.gtnewhorizons.angelica.glsm.backend.VSyncMode;
@@ -40,6 +43,7 @@ import com.gtnewhorizons.angelica.sdlgpu.resource.FBOClearTracker;
 import com.gtnewhorizons.angelica.sdlgpu.resource.FboState;
 import com.gtnewhorizons.angelica.sdlgpu.resource.FormatMap;
 import com.gtnewhorizons.angelica.sdlgpu.resource.Image3DClear;
+import com.gtnewhorizons.angelica.sdlgpu.resource.MappedRange;
 import com.gtnewhorizons.angelica.sdlgpu.resource.PersistentBufferSync;
 import com.gtnewhorizons.angelica.sdlgpu.resource.PackState;
 import com.gtnewhorizons.angelica.sdlgpu.resource.PersistentMapping;
@@ -63,6 +67,7 @@ import com.gtnewhorizons.angelica.sdlgpu.util.ThreadRegistry;
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongArrayFIFOQueue;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -161,12 +166,14 @@ public class SDLGPURenderBackend extends RenderBackend {
             @Override public long nextSeq() { return TransferThread.nextSeq(); }
         });
     private final PipelineApplier pipelineApplier = new PipelineApplier(frameManager, resourceManager, shaderManager, pipelineStore, fboClearTracker, persistentSync, samplerBinder, storageTextureBinder, storageBufferBinder);
+    private final VertexWriteReplayer vertexWriteReplayer = new VertexWriteReplayer(shaderManager, resourceManager, pipelineApplier, computeBinder, SDLGPURenderBackend::s);
     private final AttachmentClear attachmentClear = new AttachmentClear(frameManager, pipelineStore, shaderManager);
     private final DepthStencilReadback depthStencilReadback = new DepthStencilReadback(frameManager, resourceManager, pipelineStore, shaderManager, fboClearTracker);
     private final DrawDispatch drawDispatch = new DrawDispatch(device, frameManager, resourceManager, pipelineApplier, this::enqueuePreCopied);
     private final FFPTrace ffpTrace = SystemProperties.FFP_TRACE ? new FFPTrace(resourceManager) : null;
 
     private final IntOpenHashSet missingProgramWarned = new IntOpenHashSet();
+    private final LongOpenHashSet warnedBufferOps = new LongOpenHashSet();
 
     private boolean droppedCopyWarned;
     private boolean droppedSsboWriteWarned;
@@ -247,7 +254,9 @@ public class SDLGPURenderBackend extends RenderBackend {
 
 
     @Override public void onPersistentBufferWrite(int glId, long offset, long size) {
-        persistentSync.onPersistentBufferWrite(glId, offset, size);
+        if (!persistentSync.onPersistentBufferWrite(glId, offset, size)) {
+            warnInvalidBufferOp("persistent write out of range", glId);
+        }
     }
 
     @Override public void onPostWindowCreate(long window) {
@@ -295,6 +304,8 @@ public class SDLGPURenderBackend extends RenderBackend {
                 }
             });
         pipelineApplier.setDeferredUploadSink(this::enqueuePreCopied);
+        frameManager.setRenderPassEndHook(vertexWriteReplayer::flush);
+        resourceManager.setTextureReplaceHook(this::flushVertexWritesBeforeTextureChange);
         frameManager.setPreRenderPassHook(() -> {
             final ContextState st = s();
             pipelineApplier.flushUniformBlocks(st);
@@ -514,14 +525,13 @@ public class SDLGPURenderBackend extends RenderBackend {
             st.appliedLogicOpKey = 0;
             st.fragSamplerBindings.free();
             st.vertSamplerBindings.free();
-            if (st.mappedStagingBuffer != null) {
-                MemoryUtil.memFree(st.mappedStagingBuffer);
-            }
-            clearMappedState(st);
         }
         registeredStates.clear();
 
         drawDispatch.clearWarnedState();
+        synchronized (warnedBufferOps) {
+            warnedBufferOps.clear();
+        }
         attachmentClear.shutdown();
         depthStencilReadback.shutdown();
         textureOps.shutdown();
@@ -532,7 +542,7 @@ public class SDLGPURenderBackend extends RenderBackend {
     }
 
     @Override public boolean isAvailable() {
-        return SystemProperties.USE_SDL_GPU && SDLGPUGate.isSDLGPUAvailable() && SDLGPUGate.isEngaged();
+        return BackendOptions.sdlGpuRequested() && SDLGPUGate.isSDLGPUAvailable() && SDLGPUGate.isEngaged();
     }
 
     @Override public String getName() {
@@ -1202,9 +1212,11 @@ public class SDLGPURenderBackend extends RenderBackend {
         if (st.rasterizerDiscard) return;
         final FrameState f = frameManager.frame();
         if (!f.frameActive) { f.droppedDrawsThisFrame++; return; }
+        prepareVertexWrites(st);
         if (mode == GL11.GL_TRIANGLE_FAN && count >= 3) {
             if (!drawDispatch.drawTriangleFanAsTriangleList(st, first, count)) { f.droppedDrawsThisFrame++; return; }
             if (SystemProperties.FFP_TRACE) ffpTrace.trace(st, "arraysFan", mode, count, 0, first, 0);
+            captureVertexWrites(st, first, count, 1, 0, 0, 0);
             return;
         }
         drawDispatch.setPrimitiveTypeForDraw(st, FormatMap.mapPrimitiveType(mode));
@@ -1213,6 +1225,7 @@ public class SDLGPURenderBackend extends RenderBackend {
         if (!pipelineApplier.applyPipelineAndState(st, f)) { f.droppedDrawsThisFrame++; return; }
         if (SystemProperties.FFP_TRACE) ffpTrace.trace(st, "arrays", mode, count, 0, first, 0);
         SDL_DrawGPUPrimitives(f.renderPass, count, 1, first, 0);
+        captureVertexWrites(st, first, count, 1, 0, 0, 0);
     }
 
     @Override public void drawElements(int mode, int count, int type, long indices) {
@@ -1222,6 +1235,7 @@ public class SDLGPURenderBackend extends RenderBackend {
         final int firstIndex = (int) (indices / FormatMap.indexElementSize(type));
         if (SystemProperties.FFP_TRACE) ffpTrace.trace(st, "elements", mode, count, type, firstIndex, 0);
         drawDispatch.issueIndexedDraw(st, rp, st.currentVao.elementBuffer, type, count, 1, firstIndex, 0);
+        captureVertexWrites(st, 0, count, 1, type, indices, 0);
     }
 
     @Override public void drawElementsInstanced(int mode, int count, int type, long indices, int primcount) {
@@ -1231,6 +1245,7 @@ public class SDLGPURenderBackend extends RenderBackend {
         final int firstIndex = (int) (indices / FormatMap.indexElementSize(type));
         if (SystemProperties.FFP_TRACE) ffpTrace.trace(st, "elementsInstanced", mode, count, type, firstIndex, 0);
         drawDispatch.issueIndexedDraw(st, rp, st.currentVao.elementBuffer, type, count, primcount, firstIndex, 0);
+        captureVertexWrites(st, 0, count, primcount, type, indices, 0);
     }
 
 
@@ -1241,10 +1256,12 @@ public class SDLGPURenderBackend extends RenderBackend {
         final int firstIndex = (int) (indices / FormatMap.indexElementSize(type));
         if (SystemProperties.FFP_TRACE) ffpTrace.trace(st, "elementsBaseVertex", mode, count, type, firstIndex, baseVertex);
         drawDispatch.issueIndexedDraw(st, rp, st.currentVao.elementBuffer, type, count, 1, firstIndex, baseVertex);
+        captureVertexWrites(st, 0, count, 1, type, indices, baseVertex);
     }
 
     private long prepareIndexedDrawBind(ContextState st, int mode, int type, String opName) {
         if (st.rasterizerDiscard) return 0;
+        prepareVertexWrites(st);
         if (!drawDispatch.prepareIndexedDraw(st, mode, type)) return 0;
         final int ebo = st.currentVao.elementBuffer;
         final long eboHandle = resourceManager.getBufferHandle(ebo);
@@ -1273,6 +1290,7 @@ public class SDLGPURenderBackend extends RenderBackend {
             final int baseVertex = MemoryUtil.memGetInt(pBaseVertex + offset);
             if (SystemProperties.FFP_TRACE) ffpTrace.trace(st, "multiElementsBaseVertex", mode, count, type, firstIndex, baseVertex);
             drawDispatch.issueIndexedDraw(st, rp, ebo, type, count, 1, firstIndex, baseVertex);
+            captureVertexWrites(st, 0, count, 1, type, indices, baseVertex);
         }
     }
 
@@ -1299,6 +1317,7 @@ public class SDLGPURenderBackend extends RenderBackend {
             }
             if (SystemProperties.FFP_TRACE) ffpTrace.trace(st, "elementsIndirect", mode, drawcount, type, (int) indirect, 0);
             SDL_DrawGPUIndexedPrimitivesIndirect(rp, indirectHandle, (int) indirect, drawcount);
+            if (st.boundProgramObj != null && st.boundProgramObj.vertexWriteReplay != null) vertexWriteReplayer.noteIndirectDraw();
         } finally {
             Tracy.endZone();
         }
@@ -1332,6 +1351,12 @@ public class SDLGPURenderBackend extends RenderBackend {
         final int srcGlId = getBoundBuffer(readTarget);
         final int dstGlId = getBoundBuffer(writeTarget);
         if (srcGlId == 0 || dstGlId == 0 || size <= 0) return;
+        final long srcSize = resourceManager.getBufferSize(srcGlId);
+        final long dstSize = resourceManager.getBufferSize(dstGlId);
+        if (readOffset < 0 || writeOffset < 0 || (srcSize > 0 && (readOffset > srcSize || size > srcSize - readOffset)) || (dstSize > 0 && (writeOffset > dstSize || size > dstSize - writeOffset))) {
+            warnInvalidBufferOp("glCopyBufferSubData out of range", dstGlId);
+            return;
+        }
         resourceManager.dropArrayShadow(dstGlId);
         resourceManager.dropEboShadow(dstGlId);
         resourceManager.markBufferContentsDefined(dstGlId);
@@ -1346,7 +1371,7 @@ public class SDLGPURenderBackend extends RenderBackend {
                 deferredCopyOp.dstHandle = dstHandle;
                 deferredCopyOp.writeOffset = writeOffset;
                 deferredCopyOp.seq = seq;
-                final boolean handled = resourceManager.enqueuePersistentCopyDeferred(srcGlId, dstGlId, seq, deferredCopyOp);
+                final boolean handled = resourceManager.enqueuePersistentCopyDeferred(srcGlId, dstGlId, seq, readOffset, size, deferredCopyOp);
                 if (handled) {
                     wakeTransferThread();
                     return;
@@ -1405,6 +1430,11 @@ public class SDLGPURenderBackend extends RenderBackend {
     @Override public void deleteTextures(int texture) {
         fboClearTracker.scrubPendingClearsForTexture(s(), texture);
         resourceManager.deleteTexture(texture);
+    }
+
+    /** Captured vertex-write replays name textures by GL id, which a delete or reallocation would make mean something else. */
+    private void flushVertexWritesBeforeTextureChange() {
+        if (vertexWriteReplayer.hasPending()) frameManager.endRenderPassIfActive(FrameManager.PASS_END_COMPUTE);
     }
 
 
@@ -2760,8 +2790,10 @@ public class SDLGPURenderBackend extends RenderBackend {
     }
 
     private void deleteBuffer(int buffer) {
-        dropMappingFor(buffer);
-        if (buffer != 0) unbindDeletedBuffer(s(), buffer);
+        if (buffer != 0) {
+            freePlainMappingFor(buffer, false);
+            unbindDeletedBuffer(s(), buffer);
+        }
         readbackShadows.release(buffer);
         resourceManager.deleteBuffer(buffer);
     }
@@ -2808,12 +2840,6 @@ public class SDLGPURenderBackend extends RenderBackend {
         if (ssboChanged) st.ssboBindGen++;
     }
 
-    private static void dropMappingFor(int buffer) {
-        final ContextState st = s();
-        if (buffer == 0 || st.mappedBufferGlId != buffer || st.mappedStagingBuffer == null) return;
-        MemoryUtil.memFree(st.mappedStagingBuffer);
-        clearMappedState(st);
-    }
     @Override public void bindBuffer(int target, int buffer) {
         final ContextState st = s();
         switch (target) {
@@ -2913,8 +2939,15 @@ public class SDLGPURenderBackend extends RenderBackend {
     }
 
     @Override public void bufferData(int target, long size, int usage) {
-        final int glId = getBoundBuffer(target);
+        final ContextState cs = s();
+        final int glId = cs.getBoundBuffer(target);
         if (glId == 0) return;
+        if (refuseImmutable(glId, "glBufferData on immutable storage")) return;
+        respecifyStore(cs, target, glId, size, usage);
+    }
+
+    private void respecifyStore(ContextState cs, int target, int glId, long size, int usage) {
+        freePlainMappingFor(glId, true);
         resourceManager.recordBufferGlParams(glId, usage, BufferParams.MUTABLE_STORE);
         if (target == GL31.GL_UNIFORM_BUFFER) {
             if (resourceManager.getBufferSize(glId) == size) return;
@@ -2930,14 +2963,45 @@ public class SDLGPURenderBackend extends RenderBackend {
         readbackShadows.release(glId);
         resourceManager.deleteBuffer(glId);
         resourceManager.createBuffer(glId, sdlUsage, size);
-        if (target == GL15.GL_ARRAY_BUFFER) s().bumpAttribStateGen();
+        if (target == GL15.GL_ARRAY_BUFFER) cs.bumpAttribStateGen();
+    }
+
+    private void freePlainMappingFor(int glId, boolean warn) {
+        final ByteBuffer staging = resourceManager.takePlainStaging(glId);
+        if (staging == null) return;
+        MemoryUtil.memFree(staging);
+        if (warn) warnInvalidBufferOp("glBufferData on mapped buffer", glId);
+    }
+
+    private boolean refuseImmutable(int glId, String op) {
+        if (resourceManager.getBufferStorageFlags(glId) == BufferParams.MUTABLE_STORE) return false;
+        warnInvalidBufferOp(op, glId);
+        return true;
+    }
+
+    @Override public boolean isBufferImmutable(int glId) {
+        return resourceManager.getBufferStorageFlags(glId) != BufferParams.MUTABLE_STORE;
+    }
+
+    private void warnInvalidBufferOp(String op, int glId) {
+        synchronized (warnedBufferOps) {
+            if (warnedBufferOps.add(((long) op.hashCode() << 32) | (glId & 0xFFFFFFFFL))) {
+                LOG.warn("{} (buffer {})", op, glId, new Throwable());
+            }
+        }
     }
 
     @Override public void bufferData(int target, ByteBuffer data, int usage) {
         final ContextState cs = s();
-        final int glId = getBoundBuffer(target);
+        final int glId = cs.getBoundBuffer(target);
         if (glId == 0 || data == null) return;
+        if (refuseImmutable(glId, "glBufferData on immutable storage")) return;
+        respecifyStore(cs, target, glId, data, usage);
+    }
+
+    private void respecifyStore(ContextState cs, int target, int glId, ByteBuffer data, int usage) {
         final long dataSize = data.remaining();
+        freePlainMappingFor(glId, true);
         resourceManager.recordBufferGlParams(glId, usage, BufferParams.MUTABLE_STORE);
         if (target == GL31.GL_UNIFORM_BUFFER) {
             if (dataSize > 0) {
@@ -3027,11 +3091,15 @@ public class SDLGPURenderBackend extends RenderBackend {
 
     @Override public void bufferSubData(int target, long offset, ByteBuffer data) {
         final ContextState cs = s();
-        final int glId = getBoundBuffer(target);
+        final int glId = cs.getBoundBuffer(target);
         if (glId == 0 || data == null) return;
         if (target == GL31.GL_UNIFORM_BUFFER) {
             final ByteBuffer shadow = resourceManager.getUboShadow(glId);
             if (shadow != null) {
+                if (offset < 0 || offset + data.remaining() > shadow.capacity()) {
+                    warnInvalidBufferOp("glBufferSubData out of range on uniform buffer", glId);
+                    return;
+                }
                 shadow.position(0);
                 ByteRegionCopy.copyByteRegion(data, data.position(), shadow, (int) offset, data.remaining());
             }
@@ -3100,133 +3168,132 @@ public class SDLGPURenderBackend extends RenderBackend {
 
     @Override public boolean unmapBuffer(int target) {
         final ContextState cs = s();
-        final int glId = getBoundBuffer(target);
+        final int glId = cs.getBoundBuffer(target);
 
-        final PersistentMapping pm = resourceManager.removePersistentMapping(glId);
-        if (pm != null) {
-            resourceManager.releasePersistentStaging(pm);
+        if (resourceManager.getPersistentMapping(glId) != null) {
+            final PersistentMapping pm = resourceManager.removePersistentMapping(glId);
+            if (pm != null) resourceManager.releasePersistentStaging(pm, glId, "unmap");
             return true;
         }
 
-        final ContextState st = cs;
-        if (st.mappedStagingBuffer == null) return false;
+        final MappedRange m = cs.mappingScratch;
+        if (!resourceManager.takePlainMapping(glId, m)) {
+            warnInvalidBufferOp("glUnmapBuffer on unmapped buffer", glId);
+            return false;
+        }
 
-        final boolean writeMap = (st.mappedAccessFlags & GL30.GL_MAP_WRITE_BIT) != 0;
+        final ByteBuffer staging = m.staging;
+        m.staging = null;
+        final boolean writeMap = (m.accessFlags & GL30.GL_MAP_WRITE_BIT) != 0;
 
         if (target == GL30.GL_PIXEL_UNPACK_BUFFER) {
-            st.mappedStagingBuffer.position(0).limit((int) st.mappedLength);
-            final long gpuHandle = resourceManager.getBufferHandle(st.mappedBufferGlId);
+            staging.position(0).limit((int) m.length);
+            final long gpuHandle = resourceManager.getBufferHandle(glId);
             if (writeMap && gpuHandle != 0) {
-                if (st.deferUploads) {
-                    enqueuePreCopied(st.mappedStagingBuffer, gpuHandle, st.mappedOffset, false);
+                if (cs.deferUploads) {
+                    enqueuePreCopied(staging, gpuHandle, m.offset, false);
                 } else if (frameManager.getCommandBuffer() != 0) {
-                    resourceManager.uploadToBuffer(frameManager.ensureCopyPass(), st.mappedStagingBuffer, gpuHandle, st.mappedOffset, false);
+                    resourceManager.uploadToBuffer(frameManager.ensureCopyPass(), staging, gpuHandle, m.offset, false);
                 }
-                resourceManager.markBufferContentsDefined(st.mappedBufferGlId);
+                resourceManager.markBufferContentsDefined(glId);
             }
-            final ByteBuffer old = resourceManager.putPboStaging(glId, st.mappedStagingBuffer);
+            final ByteBuffer old = resourceManager.putPboStaging(glId, staging);
             if (old != null) MemoryUtil.memFree(old);
-            clearMappedState(st);
             return true;
         }
 
         if (target == GL31.GL_UNIFORM_BUFFER) {
-            final ByteBuffer shadow = resourceManager.getUboShadow(st.mappedBufferGlId);
-            if (writeMap && shadow != null && st.mappedOffset + st.mappedLength <= shadow.capacity()) {
-                st.mappedStagingBuffer.position(0).limit((int) st.mappedLength);
-                shadow.position((int) st.mappedOffset).limit((int) (st.mappedOffset + st.mappedLength));
-                shadow.put(st.mappedStagingBuffer);
+            final ByteBuffer shadow = resourceManager.getUboShadow(glId);
+            if (writeMap && shadow != null && m.offset + m.length <= shadow.capacity()) {
+                staging.position(0).limit((int) m.length);
+                shadow.position((int) m.offset).limit((int) (m.offset + m.length));
+                shadow.put(staging);
                 shadow.position(0).limit(shadow.capacity());
-                resourceManager.markBufferContentsDefined(st.mappedBufferGlId);
+                resourceManager.markBufferContentsDefined(glId);
             }
-            MemoryUtil.memFree(st.mappedStagingBuffer);
-            clearMappedState(st);
+            MemoryUtil.memFree(staging);
             return true;
         }
 
         if (!writeMap) {
-            MemoryUtil.memFree(st.mappedStagingBuffer);
-            clearMappedState(st);
+            MemoryUtil.memFree(staging);
             return true;
         }
 
-        st.mappedStagingBuffer.position(0).limit((int) st.mappedLength);
+        staging.position(0).limit((int) m.length);
         final long gpuHandle;
-        if (st.mappedInvalidate) {
+        if (m.invalidate) {
             final int sdlUsage = FormatMap.mapBufferUsage(0);
-            final long glSize = Math.max(resourceManager.getBufferSize(st.mappedBufferGlId), st.mappedLength);
-            final int glUsage = resourceManager.getBufferGlUsage(st.mappedBufferGlId);
-            final int storageFlags = resourceManager.getBufferStorageFlags(st.mappedBufferGlId);
-            resourceManager.deleteBuffer(st.mappedBufferGlId);
-            gpuHandle = resourceManager.createBuffer(st.mappedBufferGlId, sdlUsage, glSize);
-            resourceManager.recordBufferGlParams(st.mappedBufferGlId, glUsage, storageFlags);
-            st.bumpAttribStateGen();
+            final long glSize = Math.max(resourceManager.getBufferSize(glId), m.length);
+            final int glUsage = resourceManager.getBufferGlUsage(glId);
+            final int storageFlags = resourceManager.getBufferStorageFlags(glId);
+            resourceManager.deleteBuffer(glId);
+            gpuHandle = resourceManager.createBuffer(glId, sdlUsage, glSize);
+            resourceManager.recordBufferGlParams(glId, glUsage, storageFlags);
+            cs.bumpAttribStateGen();
         } else {
-            gpuHandle = resourceManager.getBufferHandle(st.mappedBufferGlId);
+            gpuHandle = resourceManager.getBufferHandle(glId);
         }
         if (target == GL15.GL_ELEMENT_ARRAY_BUFFER
-                && (cs.primitiveRestartEnabled || resourceManager.hasEboShadow(st.mappedBufferGlId))) {
-            final int len = (int) st.mappedLength;
-            st.mappedStagingBuffer.position(0).limit(len);
-            persistentSync.mirrorEboShadow(st.mappedBufferGlId, st.mappedStagingBuffer, (int) st.mappedOffset, len);
-            st.mappedStagingBuffer.position(0).limit(len);
+                && (cs.primitiveRestartEnabled || resourceManager.hasEboShadow(glId))) {
+            final int len = (int) m.length;
+            staging.position(0).limit(len);
+            persistentSync.mirrorEboShadow(glId, staging, (int) m.offset, len);
+            staging.position(0).limit(len);
         }
-        if (target == GL15.GL_ARRAY_BUFFER && resourceManager.hasArrayShadow(st.mappedBufferGlId)) {
-            final int len = (int) st.mappedLength;
-            st.mappedStagingBuffer.position(0).limit(len);
-            resourceManager.mirrorArrayShadowRegion(st.mappedBufferGlId, st.mappedStagingBuffer, (int) st.mappedOffset);
-            st.mappedStagingBuffer.position(0).limit(len);
+        if (target == GL15.GL_ARRAY_BUFFER && resourceManager.hasArrayShadow(glId)) {
+            final int len = (int) m.length;
+            staging.position(0).limit(len);
+            resourceManager.mirrorArrayShadowRegion(glId, staging, (int) m.offset);
+            staging.position(0).limit(len);
         }
         if (gpuHandle != 0) {
-            if (st.deferUploads) {
-                enqueuePreCopied(st.mappedStagingBuffer, gpuHandle, st.mappedOffset, false);
+            if (cs.deferUploads) {
+                enqueuePreCopied(staging, gpuHandle, m.offset, false);
             } else if (frameManager.getCommandBuffer() != 0) {
-                resourceManager.uploadToBuffer(frameManager.ensureCopyPass(), st.mappedStagingBuffer, gpuHandle, st.mappedOffset, false);
+                resourceManager.uploadToBuffer(frameManager.ensureCopyPass(), staging, gpuHandle, m.offset, false);
             }
-            resourceManager.markBufferContentsDefined(st.mappedBufferGlId);
+            resourceManager.markBufferContentsDefined(glId);
         }
 
-        MemoryUtil.memFree(st.mappedStagingBuffer);
-        clearMappedState(st);
+        MemoryUtil.memFree(staging);
         return true;
     }
 
-    private static void clearMappedState(ContextState st) {
-        st.mappedStagingBuffer = null;
-        st.mappedBufferGlId = 0;
-        st.mappedOffset = 0;
-        st.mappedLength = 0;
-        st.mappedInvalidate = false;
-        st.mappedAccessFlags = 0;
-    }
-
     @Override public ByteBuffer mapBufferRange(int target, long offset, long length, int access) {
-        final int glId = getBoundBuffer(target);
+        final ContextState cs = s();
+        final int glId = cs.getBoundBuffer(target);
         if (glId == 0 || length <= 0) return null;
 
         final boolean persistent = (access & GL44.GL_MAP_PERSISTENT_BIT) != 0;
 
         if (persistent) {
-            if (target == GL15.GL_ARRAY_BUFFER) resourceManager.dropArrayShadow(glId);
+            final int storageFlags = resourceManager.getBufferStorageFlags(glId);
+            if (storageFlags < 0 || (storageFlags & GL44.GL_MAP_PERSISTENT_BIT) == 0) {
+                warnInvalidBufferOp("glMapBufferRange persistent without persistent storage", glId);
+                return null;
+            }
             final ByteBuffer staging = MemoryUtil.memCalloc((int) length);
             final PersistentMapping fresh = new PersistentMapping(staging, offset, length, access);
-            final PersistentMapping prior = resourceManager.swapPersistentMapping(glId, fresh);
-            if (prior != null) resourceManager.releasePersistentStaging(prior);
+            if (!resourceManager.putPersistentMappingIfAbsent(glId, fresh)) {
+                MemoryUtil.memFree(staging);
+                warnInvalidBufferOp("glMapBufferRange on mapped buffer", glId);
+                return null;
+            }
+            if (target == GL15.GL_ARRAY_BUFFER) resourceManager.dropArrayShadow(glId);
             return staging;
         }
 
-        final ContextState st = s();
-        if (st.mappedStagingBuffer != null) MemoryUtil.memFree(st.mappedStagingBuffer);
-        st.mappedStagingBuffer = MemoryUtil.memAlloc((int) length);
-        st.mappedBufferGlId = glId;
-        st.mappedOffset = offset;
-        st.mappedLength = length;
-        st.mappedInvalidate = (access & GL30.GL_MAP_INVALIDATE_BUFFER_BIT) != 0;
-        st.mappedAccessFlags = access;
+        final ByteBuffer staging = MemoryUtil.memAlloc((int) length);
         if ((access & (GL30.GL_MAP_INVALIDATE_BUFFER_BIT | GL30.GL_MAP_INVALIDATE_RANGE_BIT)) == 0) {
-            seedMappedStaging(target, glId, offset, length, st.mappedStagingBuffer);
+            seedMappedStaging(target, glId, offset, length, staging);
         }
-        return st.mappedStagingBuffer;
+        if (!resourceManager.putPlainMappingIfAbsent(glId, staging, offset, length, (access & GL30.GL_MAP_INVALIDATE_BUFFER_BIT) != 0, access)) {
+            MemoryUtil.memFree(staging);
+            warnInvalidBufferOp("glMapBufferRange on mapped buffer", glId);
+            return null;
+        }
+        return staging;
     }
 
     private void seedMappedStaging(int target, int glId, long offset, long length, ByteBuffer staging) {
@@ -3314,22 +3381,31 @@ public class SDLGPURenderBackend extends RenderBackend {
     @Override public void flushMappedBufferRange(int target, long offset, long length) {
         final int glId = getBoundBuffer(target);
         if (glId == 0 || length <= 0) return;
-        persistentSync.onPersistentBufferWrite(glId, offset, length);
+        if (!persistentSync.onPersistentBufferWrite(glId, offset, length)) {
+            warnInvalidBufferOp("glFlushMappedBufferRange out of range", glId);
+        }
     }
 
     @Override public void bufferStorage(int target, ByteBuffer data, int flags) {
-        bufferData(target, data, GL15.GL_DYNAMIC_DRAW);
-        recordImmutableStorage(target, flags);
+        final ContextState cs = s();
+        final int glId = cs.getBoundBuffer(target);
+        if (glId == 0) return;
+        if (refuseImmutable(glId, "glBufferStorage on immutable storage")) return;
+        if (data != null) respecifyStore(cs, target, glId, data, GL15.GL_DYNAMIC_DRAW);
+        recordImmutableStorage(glId, flags);
     }
 
     @Override public void bufferStorage(int target, long size, int flags) {
-        bufferData(target, size, GL15.GL_DYNAMIC_DRAW);
-        recordImmutableStorage(target, flags);
+        final ContextState cs = s();
+        final int glId = cs.getBoundBuffer(target);
+        if (glId == 0) return;
+        if (refuseImmutable(glId, "glBufferStorage on immutable storage")) return;
+        respecifyStore(cs, target, glId, size, GL15.GL_DYNAMIC_DRAW);
+        recordImmutableStorage(glId, flags);
     }
 
-    private void recordImmutableStorage(int target, int flags) {
-        final int glId = getBoundBuffer(target);
-        if (glId != 0) resourceManager.recordBufferGlParams(glId, GL15.GL_DYNAMIC_DRAW, flags);
+    private void recordImmutableStorage(int glId, int flags) {
+        resourceManager.recordBufferGlParams(glId, GL15.GL_DYNAMIC_DRAW, flags);
     }
     @Override public void getBufferSubData(int target, long offset, ByteBuffer data) {
         final int glId = getBoundBuffer(target);
@@ -3345,21 +3421,10 @@ public class SDLGPURenderBackend extends RenderBackend {
     }
 
     private void downloadBufferBlocking(long handle, int offset, int size, ByteBuffer out) {
-        flushDeferredUploadsForRead();
-        frameManager.endCopyPassIfActive();
-        frameManager.endRenderPassIfActive(FrameManager.PASS_END_COPY);
+        flushAndSubmitMidFrame();
         final long cb = SDL_AcquireGPUCommandBuffer(device.getDevice());
         if (cb == 0) return;
         resourceManager.downloadFromBuffer(cb, handle, offset, size, out);
-    }
-
-    private void flushDeferredUploadsForRead() {
-        final ContextState st = s();
-        drainDeferredPersistentRegions(st);
-        resourceManager.flushUploadArena();
-        if (transferThread != null && st.frameHighestEnqueuedSeq > transferThread.getSubmittedSeq()) {
-            transferThread.awaitSubmittedUpTo(st.frameHighestEnqueuedSeq);
-        }
     }
 
     private static void serveFromShadow(ByteBuffer shadow, int srcOffset, ByteBuffer data, int rem) {
@@ -3398,8 +3463,9 @@ public class SDLGPURenderBackend extends RenderBackend {
         }
 
         final PersistentMapping pm = resourceManager.getPersistentMapping(glId);
-        final ContextState st = s();
-        final boolean plainMapped = st.mappedStagingBuffer != null && st.mappedBufferGlId == glId;
+        final MappedRange plain = s().mappingScratch;
+        final boolean plainMapped = resourceManager.peekPlainMapping(glId, plain);
+        plain.staging = null;
 
         final boolean mapped;
         final int accessFlags;
@@ -3412,9 +3478,9 @@ public class SDLGPURenderBackend extends RenderBackend {
             mapLength = pm.length;
         } else if (plainMapped) {
             mapped = true;
-            accessFlags = st.mappedAccessFlags;
-            mapOffset = st.mappedOffset;
-            mapLength = st.mappedLength;
+            accessFlags = plain.accessFlags;
+            mapOffset = plain.offset;
+            mapLength = plain.length;
         } else {
             mapped = false;
             accessFlags = 0;
@@ -3852,14 +3918,18 @@ public class SDLGPURenderBackend extends RenderBackend {
     @Override public int createBuffers() { return resourceManager.genBuffer(); }
     @Override public void namedBufferData(int buffer, long size, int usage) {
         if (buffer == 0 || size <= 0) return;
+        if (refuseImmutable(buffer, "glNamedBufferData on immutable storage")) return;
         final int sdlUsage = FormatMap.mapBufferUsage(GL15.GL_ARRAY_BUFFER);
+        freePlainMappingFor(buffer, true);
         resourceManager.deleteBuffer(buffer);
         resourceManager.createBuffer(buffer, sdlUsage, size);
         resourceManager.recordBufferGlParams(buffer, usage, BufferParams.MUTABLE_STORE);
     }
     @Override public void namedBufferData(int buffer, ByteBuffer data, int usage) {
         if (buffer == 0 || data == null) return;
+        if (refuseImmutable(buffer, "glNamedBufferData on immutable storage")) return;
         final int sdlUsage = FormatMap.mapBufferUsage(GL15.GL_ARRAY_BUFFER);
+        freePlainMappingFor(buffer, true);
         resourceManager.deleteBuffer(buffer);
         final long handle = resourceManager.createBuffer(buffer, sdlUsage, data.remaining());
         resourceManager.recordBufferGlParams(buffer, usage, BufferParams.MUTABLE_STORE);
@@ -4108,36 +4178,53 @@ public class SDLGPURenderBackend extends RenderBackend {
     }
 
     private static final int CLEAR_CHUNK_BYTES = 64 * 1024;
+    private static final int FILL_CHUNK_BYTES = 4 * 1024 * 1024;
+
+    private static boolean isAllZero(ByteBuffer data, int elemBytes) {
+        final int n = Math.min(elemBytes, data.remaining());
+        for (int i = 0; i < n; i++) {
+            if (data.get(data.position() + i) != 0) return false;
+        }
+        return true;
+    }
     @Override public void clearBufferSubData(int target, int internalFormat, long offset, long size, int format, int type, ByteBuffer data) {
         final int glId = getBoundBuffer(target);
         if (glId == 0 || size <= 0) return;
+        final long bufSize = resourceManager.getBufferSize(glId);
+        if (offset < 0 || (bufSize > 0 && (offset > bufSize || size > bufSize - offset))) {
+            warnInvalidBufferOp("glClearBufferSubData out of range", glId);
+            return;
+        }
         final long handle = resourceManager.getBufferHandle(glId);
         if (handle == 0 || frameManager.getCommandBuffer() == 0) return;
 
         final int elemBytes = Math.max(1, PixelOps.glPixelSize(format, type));
-        final int chunkBytes = (int) Math.min(size, CLEAR_CHUNK_BYTES);
+        final boolean defer = s().deferUploads && target != GL43.GL_SHADER_STORAGE_BUFFER;
+        // Undeferred clears stage one large pattern and upload it repeatedly
+        final int chunkBytes = (int) Math.min(size, defer ? CLEAR_CHUNK_BYTES : FILL_CHUNK_BYTES);
         final int alignedChunk = (chunkBytes / elemBytes) * elemBytes;
         if (alignedChunk == 0) return;
         resourceManager.markBufferContentsDefined(glId);
-        final ByteBuffer chunk = MemoryUtil.memAlloc(alignedChunk);
+        final boolean zero = data == null || isAllZero(data, elemBytes);
+        final ByteBuffer chunk = zero ? MemoryUtil.memCalloc(alignedChunk) : MemoryUtil.memAlloc(alignedChunk);
         try {
-            for (int i = 0; i < alignedChunk; i++) {
-                final byte v = (data != null && (i % elemBytes) < data.remaining())
-                    ? data.get(data.position() + (i % elemBytes)) : 0;
-                chunk.put(i, v);
+            if (!zero) {
+                for (int i = 0; i < alignedChunk; i++) {
+                    final byte v = (i % elemBytes) < data.remaining() ? data.get(data.position() + (i % elemBytes)) : 0;
+                    chunk.put(i, v);
+                }
             }
             chunk.position(0).limit(alignedChunk);
+            if (!defer) {
+                resourceManager.fillBuffer(frameManager.ensureCopyPass(), chunk, handle, offset, size);
+                return;
+            }
             long remaining = size;
             long writeOffset = offset;
-            final boolean defer = s().deferUploads && target != GL43.GL_SHADER_STORAGE_BUFFER;
             while (remaining > 0) {
                 final int n = (int) Math.min(remaining, alignedChunk);
                 chunk.position(0).limit(n);
-                if (defer) {
-                    enqueuePreCopied(chunk, handle, writeOffset, false);
-                } else {
-                    resourceManager.uploadToBuffer(frameManager.ensureCopyPass(), chunk, handle, writeOffset, false);
-                }
+                enqueuePreCopied(chunk, handle, writeOffset, false);
                 remaining -= n;
                 writeOffset += n;
             }
@@ -4162,11 +4249,14 @@ public class SDLGPURenderBackend extends RenderBackend {
             return;
         }
 
-        // Volume-sized staging, so it is only reached for 3D formats the compute clear cannot address.
-        final long totalBytes = (long) mipW * mipH * mipD * bpp;
-        if (totalBytes <= 0 || totalBytes > Integer.MAX_VALUE) return;
         final long cp = frameManager.ensureCopyPass();
         if (cp == 0) return;
+        // A volume-sized staging buffer would allocate and upload each byte (1 GB for Euphoria Patches' floodfill!!)
+        if (mipD > 1 && resourceManager.zeroTexture3D(cp, texHandle, mipW, mipH, mipD, level, bpp)) {
+            return;
+        }
+        final long totalBytes = (long) mipW * mipH * mipD * bpp;
+        if (totalBytes <= 0 || totalBytes > Integer.MAX_VALUE) return;
         final ByteBuffer zeros = MemoryUtil.memCalloc((int) totalBytes);
         try {
             if (mipD > 1) {
@@ -4200,6 +4290,10 @@ public class SDLGPURenderBackend extends RenderBackend {
     @Override public void memoryBarrier(int barriers) {
         // Graphics storage bindings are read-only on SDL_GPU; RW is compute-pass only
         frameManager.endCopyPassIfActive();
+        // Replayed vertex image writes land when the render pass ends, and a barrier promises them to the draws after it
+        if ((barriers & (GL42.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL42.GL_TEXTURE_FETCH_BARRIER_BIT)) != 0 && vertexWriteReplayer.hasPending()) {
+            frameManager.endRenderPassIfActive(FrameManager.PASS_END_COMPUTE);
+        }
     }
 
     @Override public void copyImageSubData(int srcName, int srcTarget, int srcLevel, int srcX, int srcY, int srcZ,
@@ -4346,18 +4440,45 @@ public class SDLGPURenderBackend extends RenderBackend {
         voxelizationDispatcher.endBatch(pass);
     }
 
+    @Override public void setVertexWriteReplay(int graphicsProgram, VertexWriteReplaySetup setup) {
+        vertexWriteReplayer.setReplay(graphicsProgram, setup);
+    }
+
+    @Override public boolean supportsComputeImageAtomics() {
+        return device.supportsSpirv() || !device.supportsMsl();
+    }
+
+    @Override public boolean supportsComputeImageAtomics(int width, int height, int depth) {
+        return supportsComputeImageAtomics() || device.supportsImageAtomics(width, height, depth);
+    }
+
+    private void prepareVertexWrites(ContextState st) {
+        final ShaderManager.ProgramObject prog = st.boundProgramObj;
+        if (prog != null && prog.vertexWriteReplay != null) vertexWriteReplayer.ensureImageUsage(prog.vertexWriteReplay);
+    }
+
+    private void captureVertexWrites(ContextState st, int first, int count, int instances, int indexType, long indexOffset, int baseVertex) {
+        final ShaderManager.ProgramObject prog = st.boundProgramObj;
+        if (prog != null && prog.vertexWriteReplay != null) {
+            vertexWriteReplayer.capture(st, first, count, instances, indexType, indexOffset, baseVertex);
+            if (!frameManager.isRenderPassActive()) vertexWriteReplayer.flush();
+        }
+    }
+
     @Override
     public void drawArraysInstanced(int mode, int first, int count, int primcount) {
         if (count <= 0 || primcount <= 0) return;
         final ContextState st = s();
         if (st.rasterizerDiscard) return;
         if (!frameManager.isFrameActive()) return;
+        prepareVertexWrites(st);
         drawDispatch.setPrimitiveTypeForDraw(st, FormatMap.mapPrimitiveType(mode));
         pipelineApplier.ensureDrawRenderPass(st);
         if (!frameManager.isRenderPassActive()) return;
         if (!pipelineApplier.applyPipelineAndState(st)) return;
         if (SystemProperties.FFP_TRACE) ffpTrace.trace(st, "arraysInstanced", mode, count, 0, first, 0);
         SDL_DrawGPUPrimitives(frameManager.getRenderPass(), count, primcount, first, 0);
+        captureVertexWrites(st, first, count, primcount, 0, 0, 0);
     }
 
     @Override
@@ -4468,8 +4589,8 @@ public class SDLGPURenderBackend extends RenderBackend {
         long readOffset, size, dstHandle, writeOffset, seq;
         @Override
         public void accept(PersistentMapping src, PersistentMapping dst) {
-            enqueueUpload(TransferThread.StagingReadUpload.acquire(src.staging, readOffset, size, dstHandle, writeOffset, seq, false));
-            if (dst != null) PersistentBufferSync.mirrorPersistentCopy(src.staging, readOffset, dst.staging, writeOffset, size);
+            enqueueUpload(TransferThread.StagingReadUpload.acquire(src.staging, src.stagingIndex(readOffset), size, dstHandle, writeOffset, seq, false));
+            if (dst != null) PersistentBufferSync.mirrorPersistentCopy(src, readOffset, dst, writeOffset, size);
         }
     }
 }
