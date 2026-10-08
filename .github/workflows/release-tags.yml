@@ -1,33 +1,86 @@
-
 name: Release tagged build
 
 on:
+  workflow_dispatch:
+    inputs:
+      upstream_version:
+        description: 'Upstream release version (blank = latest; use the version actually merged into this fork)'
+        type: string
+        required: false
+      bump:
+        description: 'Fork version increment'
+        type: choice
+        required: true
+        default: patch
+        options: [patch, minor, major]
+      release_existing:
+        description: 'Internal: build a pre-existing tag; do not select manually'
+        type: boolean
+        required: false
+        default: false
   push:
-    tags: [ '*', '!tracy-v*', '!moltenvk-v*' ]
+    tags:
+      - '*fork-glyphfix*'
+      - '!tracy-v*'
+      - '!moltenvk-v*'
 
 permissions:
   contents: write
+  actions: write
+
+concurrency:
+  group: fork-release-version
+  cancel-in-progress: false
 
 jobs:
-  release-tags:
-    uses: GTNewHorizons/GTNH-Actions-Workflows/.github/workflows/release-tags.yml@master
-    secrets: inherit
-
-  notify-discord:
-    needs: [release-tags]
+  create-tag:
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_existing }}
     runs-on: ubuntu-24.04
-    if: >-
-      ${{ !endsWith(github.ref_name, '-snapshot')
-          && !contains(github.event.head_commit.message, '[snapshot]')
-          && !endsWith(github.ref_name, '-pre') }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-      - name: Announce release to Discord
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Determine and create fork tag
+        id: version
         shell: bash
         env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
-        run: bash .github/scripts/announce-release.sh
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_INPUT: ${{ inputs.upstream_version }}
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force origin
+          upstream="$UPSTREAM_INPUT"
+          if [[ -z "$upstream" ]]; then
+            upstream="$(gh api repos/GTNewHorizons/Angelica/releases/latest --jq '.tag_name')"
+          fi
+          upstream="${upstream#v}"
+          if [[ ! "$upstream" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid upstream version: $upstream (expected X.Y.Z)" >&2
+            exit 1
+          fi
+          # Angelica increments only glyphfix number for the selected upstream.
+          latest="$(git tag --list "${upstream}fork-glyphfix*" | sed -nE "s/^${upstream//./\.}fork-glyphfix([0-9]+)$/\1/p" | sort -n | tail -1)"
+          next=$(( ${latest:-0} + 1 ))
+          tag="${upstream}fork-glyphfix${next}"
+          if git show-ref --verify --quiet "refs/tags/$tag"; then
+            echo "Tag already exists: $tag" >&2
+            exit 1
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "$tag" -m "Ver $tag" "$GITHUB_SHA"
+          git push origin "refs/tags/$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Start tagged release workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          # workflow_dispatch is allowed to trigger another workflow with GITHUB_TOKEN.
+          gh workflow run release-tags.yml --ref "$TAG" -f release_existing=true -f bump=patch
+
+  release-tags:
+    if: ${{ github.event_name == 'push' || inputs.release_existing }}
+    uses: GTNewHorizons/GTNH-Actions-Workflows/.github/workflows/release-tags.yml@master
+    secrets: inherit
