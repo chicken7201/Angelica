@@ -161,6 +161,9 @@ public class FontStrategist {
         if (me.bookMode) {
             return FontProviderUnicode.get();
         }
+        if (!customFontEnabled && !me.isSplash && FontGlyphRanges.isSuperscriptDigit(chr)) {
+            return FontProviderUnicode.get();
+        }
         if (customFontEnabled && !me.isSplash) {
             // GTNH defines these glyphs in unicode_page_e0.png, so custom system fonts must not intercept them.
             if (FontGlyphRanges.isGtnhPrivateUseGlyph(chr)) {
@@ -187,6 +190,7 @@ public class FontStrategist {
 
     /** Replaces a glyph only when an enabled custom or bitmap provider can render it. */
     public static char replaceCustomGlyph(BatchingFontRenderer me, char chr, boolean forceUnicode) {
+        if (!FontConfig.enableCustomFont && FontGlyphRanges.isSuperscriptDigit(chr)) { return chr; }
         if (!FontConfig.enableGlyphReplacements || !(FontConfig.enableCustomFont || FontConfig.enableModernFont)) { return chr; }
         final char original = GlyphReplacements.getReplacementGlyph(chr);
         if (original == 0) { return chr; }

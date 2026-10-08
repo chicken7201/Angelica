@@ -256,6 +256,15 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
                 return new LoadedPage(pageIndex, generation, null, null);
             }
             final UnicodeGlyphPage glyphPage = UnicodeGlyphPage.compose(layers);
+            if (pageIndex == 0 || pageIndex == 0x20) {
+                try {
+                    glyphPage.unifySuperscriptDigits(
+                        pageIndex == 0 ? layers : loadPageLayers(0, manager),
+                        pageIndex == 0x20 ? layers : loadPageLayers(0x20, manager), pageIndex);
+                } catch (IOException | IllegalArgumentException exception) {
+                    LOGGER.debug("Superscript family unavailable; preserving composed Unicode page {}", sourceLocation, exception);
+                }
+            }
             if (pageIndex == FontGlyphRanges.UNICODE_SUBSCRIPT_DIGIT_START >>> 8) {
                 try {
                     final UnicodeGlyphPage reference = UnicodeGlyphPage.compose(
@@ -543,7 +552,7 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
                 customGlyph ? page.metrics.getDeclaredUStart(chr & 255, packedBounds) : page.metrics.getUStart(chr & 255),
                 page.metrics.getVStart(chr & 255),
                 customGlyph ? page.metrics.getDeclaredXAdvance(packedBounds)
-                    : page.metrics.getXAdvance(chr & 255, packedBounds),
+                    : page.metrics.getXAdvance(chr & 255, FontGlyphRanges.isSuperscriptDigit(chr) ? (byte) 0 : packedBounds),
                 customGlyph ? page.metrics.getDeclaredGlyphWidth(packedBounds) : page.metrics.getGlyphWidth(chr & 255),
                 customGlyph ? page.metrics.getDeclaredUSize(packedBounds) : page.metrics.getUSize(chr & 255),
                 page.metrics.getVSize(),
@@ -669,7 +678,7 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
         final byte packedBounds = this.glyphWidth[chr];
         return FontGlyphRanges.isGtnhPrivateUseGlyph(chr)
             ? metrics.getDeclaredXAdvance(packedBounds)
-            : metrics.getXAdvance(chr & 255, packedBounds);
+            : metrics.getXAdvance(chr & 255, FontGlyphRanges.isSuperscriptDigit(chr) ? (byte) 0 : packedBounds);
     }
 
     /** Returns the screen quad width from the selected bitmap bounds. */

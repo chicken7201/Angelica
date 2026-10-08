@@ -204,6 +204,93 @@ class UnicodeGlyphPageTest {
         assertTrue((normalized.getRGB(cellLeft('₂' & 255) + 6, cellTop('₂' & 255) + 9) >>> 24) != 0);
     }
 
+    /** Keeps one thin family across Latin-1 and U+20xx while retaining unrelated higher-priority glyphs. */
+    @Test
+    void unifiesSuperscriptsAcrossBothPages() {
+        final BufferedImage thinLatin = newPage(PAGE_SIZE);
+        final BufferedImage thinSymbols = newPage(PAGE_SIZE);
+        final BufferedImage thickLatin = newPage(PAGE_SIZE);
+        final BufferedImage thickSymbols = newPage(PAGE_SIZE);
+        fillSuperscriptFamily(thinLatin, thinSymbols, 2, 7, 2, 9, 0xFFFFFFFF);
+        fillSuperscriptFamily(thickLatin, thickSymbols, 0, 8, 0, 10, 0x80FFFFFF);
+        fillGlyph(thickLatin, 'A', 0, 9, 1, 14, 0x80FFFFFF);
+        fillGlyph(thickSymbols, '₄', 0, 8, 9, 16, 0x80FFFFFF);
+        final List<BufferedImage> latinLayers = Arrays.asList(thinLatin, thickLatin);
+        final List<BufferedImage> symbolLayers = Arrays.asList(thinSymbols, thickSymbols);
+        final UnicodeGlyphPage latin = UnicodeGlyphPage.compose(latinLayers);
+        final UnicodeGlyphPage symbols = UnicodeGlyphPage.compose(symbolLayers);
+
+        assertEquals(3, latin.unifySuperscriptDigits(latinLayers, symbolLayers, 0));
+        assertEquals(7, symbols.unifySuperscriptDigits(latinLayers, symbolLayers, 0x20));
+        for (char chr : FontGlyphRanges.SUPERSCRIPT_DIGITS.toCharArray()) {
+            final UnicodeGlyphPage page = chr >>> 8 == 0 ? latin : symbols;
+            assertEquals(5, page.getBitmapWidth(chr & 255));
+            assertEquals(2, page.getBitmapTop(chr & 255));
+            assertEquals(9, page.getBitmapBottom(chr & 255));
+        }
+        assertEquals(9, latin.getBitmapWidth('A' & 255));
+        assertEquals(8, symbols.getBitmapWidth('₄' & 255));
+    }
+
+    /** A partial thin layer cannot replace a complete family with missing digits. */
+    @Test
+    void ignoresPartialSuperscriptFamilies() {
+        final BufferedImage latinImage = newPage(PAGE_SIZE);
+        final BufferedImage symbolsImage = newPage(PAGE_SIZE);
+        fillSuperscriptFamily(latinImage, symbolsImage, 0, 8, 0, 10, 0xFFFFFFFF);
+        final BufferedImage partial = newPage(PAGE_SIZE);
+        fillGlyph(partial, '²', 2, 7, 2, 9, 0xFFFFFFFF);
+        final List<BufferedImage> latinLayers = Arrays.asList(latinImage, partial);
+        final List<BufferedImage> symbolLayers = Collections.singletonList(symbolsImage);
+        final UnicodeGlyphPage latin = UnicodeGlyphPage.compose(latinLayers);
+        assertEquals(3, latin.unifySuperscriptDigits(latinLayers, symbolLayers, 0));
+        assertEquals(8, latin.getBitmapWidth('²' & 255));
+        assertEquals(0, latin.getBitmapTop('²' & 255));
+        assertEquals(0, latin.unifySuperscriptDigits(Collections.singletonList(partial), symbolLayers, 0));
+    }
+
+    /** Ink coverage is normalized to the cell area so scaled atlases keep the same family selection. */
+    @Test
+    void unifiesSuperscriptsAcrossDifferentAtlasResolutions() {
+        final BufferedImage thinLatin = newPage(PAGE_SIZE * 2);
+        final BufferedImage thinSymbols = newPage(PAGE_SIZE * 2);
+        fillSuperscriptFamily(thinLatin, thinSymbols, 4, 14, 4, 18, 0xFFFFFFFF);
+        final BufferedImage thickLatin = newPage(PAGE_SIZE);
+        final BufferedImage thickSymbols = newPage(PAGE_SIZE);
+        fillSuperscriptFamily(thickLatin, thickSymbols, 0, 8, 0, 10, 0xFFFFFFFF);
+        final List<BufferedImage> latinLayers = Arrays.asList(thinLatin, thickLatin);
+        final List<BufferedImage> symbolLayers = Arrays.asList(thinSymbols, thickSymbols);
+        final UnicodeGlyphPage latin = UnicodeGlyphPage.compose(latinLayers);
+        assertEquals(3, latin.unifySuperscriptDigits(latinLayers, symbolLayers, 0));
+        assertEquals(5, latin.getBitmapWidth('²' & 255));
+        assertEquals(2, latin.getBitmapTop('²' & 255));
+        assertEquals(9, latin.getBitmapBottom('²' & 255));
+    }
+
+    /** Equal coverage retains the higher-priority family's actual pixels. */
+    @Test
+    void keepsResourcePriorityForEqualSuperscriptCoverage() {
+        final BufferedImage lowerLatin = newPage(PAGE_SIZE);
+        final BufferedImage lowerSymbols = newPage(PAGE_SIZE);
+        final BufferedImage higherLatin = newPage(PAGE_SIZE);
+        final BufferedImage higherSymbols = newPage(PAGE_SIZE);
+        fillSuperscriptFamily(lowerLatin, lowerSymbols, 2, 7, 2, 9, 0xFFFFFFFF);
+        fillSuperscriptFamily(higherLatin, higherSymbols, 2, 7, 2, 9, 0x80FFFFFF);
+        final List<BufferedImage> latinLayers = Arrays.asList(lowerLatin, higherLatin);
+        final List<BufferedImage> symbolLayers = Arrays.asList(lowerSymbols, higherSymbols);
+        final UnicodeGlyphPage latin = UnicodeGlyphPage.compose(latinLayers);
+        latin.unifySuperscriptDigits(latinLayers, symbolLayers, 0);
+        assertEquals(0x80FFFFFF, latin.takeImage().getRGB(cellLeft('²' & 255) + 2, cellTop('²' & 255) + 2));
+    }
+
+    /** Fills all ten digits in their respective pages using consistent family bounds. */
+    private static void fillSuperscriptFamily(BufferedImage latin, BufferedImage symbols,
+        int left, int right, int top, int bottom, int argb) {
+        for (char chr : FontGlyphRanges.SUPERSCRIPT_DIGITS.toCharArray()) {
+            fillGlyph(chr >>> 8 == 0 ? latin : symbols, chr, left, right, top, bottom, argb);
+        }
+    }
+
     /** Verifies an atlas cell with no visible pixels is rejected as a missing glyph. */
     @Test
     void rejectsEmptyComposedGlyphs() {

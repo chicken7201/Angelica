@@ -7,6 +7,17 @@ import org.junit.jupiter.api.Test;
 
 class FontGlyphRangesTest {
 
+    /** Recognizes every superscript digit while leaving ordinary digits, subscripts and signs alone. */
+    @Test
+    void recognizesOnlySuperscriptDigits() {
+        for (char chr : "⁰¹²³⁴⁵⁶⁷⁸⁹".toCharArray()) {
+            assertTrue(FontGlyphRanges.isSuperscriptDigit(chr));
+        }
+        for (char chr : "0123456789₀₁₂₃₄₅₆₇₈₉⁺⁻⁼⁽⁾ⁿⁱ".toCharArray()) {
+            assertFalse(FontGlyphRanges.isSuperscriptDigit(chr));
+        }
+    }
+
     /** Verifies the GTNH subscript question mark uses the resource-pack glyph path. */
     @Test
     void recognizesGtnhSubscriptQuestionMark() {

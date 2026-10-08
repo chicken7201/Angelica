@@ -148,6 +148,78 @@ final class UnicodeGlyphPage {
         }
     }
 
+    /** Chooses the least-ink complete superscript family with one baseline across both Unicode pages. */
+    int unifySuperscriptDigits(List<BufferedImage> latinLayers, List<BufferedImage> symbolLayers, int pageIndex) {
+        if (this.image == null || (pageIndex != 0 && pageIndex != 0x20)) {
+            return 0;
+        }
+        UnicodeGlyphPage selectedLatin = null;
+        UnicodeGlyphPage selectedSymbols = null;
+        double selectedInk = Double.POSITIVE_INFINITY;
+        // Descending resource priority breaks ties in favor of the user's higher-priority pack.
+        for (int latinIndex = latinLayers.size() - 1; latinIndex >= 0; latinIndex--) {
+            final UnicodeGlyphPage latin = new UnicodeGlyphPage(latinLayers.get(latinIndex));
+            for (int symbolIndex = symbolLayers.size() - 1; symbolIndex >= 0; symbolIndex--) {
+                final UnicodeGlyphPage symbols = new UnicodeGlyphPage(symbolLayers.get(symbolIndex));
+                final double ink = superscriptFamilyInk(latin, symbols);
+                if (ink < selectedInk) {
+                    selectedInk = ink;
+                    selectedLatin = latin;
+                    selectedSymbols = symbols;
+                }
+            }
+        }
+        if (selectedLatin == null) {
+            return 0;
+        }
+        final UnicodeGlyphPage source = pageIndex == 0 ? selectedLatin : selectedSymbols;
+        final int[] sourcePixels = source.image.getRGB(0, 0, source.imageWidth, source.imageHeight, null, 0, source.imageWidth);
+        final int[] targetPixels = this.image.getRGB(0, 0, this.imageWidth, this.imageHeight, null, 0, this.imageWidth);
+        int copied = 0;
+        for (int index = 0; index < FontGlyphRanges.SUPERSCRIPT_DIGITS.length(); index++) {
+            final char chr = FontGlyphRanges.SUPERSCRIPT_DIGITS.charAt(index);
+            if (chr >>> 8 == pageIndex) {
+                copyGlyphCell(sourcePixels, source.imageWidth, source.cellWidth, source.cellHeight,
+                    targetPixels, this.imageWidth, this.cellWidth, this.cellHeight, chr & 255);
+                copied++;
+            }
+        }
+        this.image.setRGB(0, 0, this.imageWidth, this.imageHeight, targetPixels, 0, this.imageWidth);
+        scanGlyphBounds();
+        return copied;
+    }
+
+    /** Rejects partial or misaligned families and scores visible coverage independently of atlas resolution. */
+    private static double superscriptFamilyInk(UnicodeGlyphPage latin, UnicodeGlyphPage symbols) {
+        final int zero = '⁰' & 255;
+        if (!symbols.isGlyphAvailable(zero)) {
+            return Double.POSITIVE_INFINITY;
+        }
+        double ink = 0;
+        for (int index = 0; index < FontGlyphRanges.SUPERSCRIPT_DIGITS.length(); index++) {
+            final char chr = FontGlyphRanges.SUPERSCRIPT_DIGITS.charAt(index);
+            final UnicodeGlyphPage source = chr >>> 8 == 0 ? latin : symbols;
+            final int glyph = chr & 255;
+            if (!source.isGlyphAvailable(glyph)
+                || !hasSameScaledBoundary(source.glyphTop[glyph], source.cellHeight, symbols.glyphTop[zero], symbols.cellHeight)
+                || !hasSameScaledBoundary(source.glyphBottom[glyph], source.cellHeight, symbols.glyphBottom[zero], symbols.cellHeight)) {
+                return Double.POSITIVE_INFINITY;
+            }
+            int pixels = 0;
+            final int left = source.getCellLeft(glyph);
+            final int top = source.getCellTop(glyph);
+            for (int y = 0; y < source.cellHeight; y++) {
+                for (int x = 0; x < source.cellWidth; x++) {
+                    if ((source.image.getRGB(left + x, top + y) >>> 24) != 0) {
+                        pixels++;
+                    }
+                }
+            }
+            ink += (double) pixels / (source.cellWidth * source.cellHeight);
+        }
+        return ink;
+    }
+
     /** Selects a complete resource-layer subscript family whose zero uses the GTNH subscript-zero bounds. */
     int alignSubscriptDigitsToReference(List<BufferedImage> layers, UnicodeGlyphPage reference) {
         if (this.image == null || reference == null || layers == null || layers.isEmpty()) {
