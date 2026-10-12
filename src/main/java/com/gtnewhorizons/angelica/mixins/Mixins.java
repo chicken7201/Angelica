@@ -86,6 +86,12 @@ public enum Mixins implements IMixins {
         .addClientMixins("client.starminer.MixinTransformClientHelper")
     ),
 
+    RAILCRAFT_LANTERN_CONNECTIONS(new MixinBuilder("Fix Railcraft lanterns rendering with Angelica")
+        .setPhase(Phase.LATE)
+        .addRequiredMod(TargetedMod.RAILCRAFT)
+        .addClientMixins("client.railcraft.MixinRenderBlockLamp")
+    ),
+
     ANGELICA_ENTITY_OVERLAYS(new MixinBuilder()
         .setPhase(Phase.EARLY)
         .setApplyIf(() -> AngelicaConfig.entityOverlayFixes)
@@ -239,6 +245,20 @@ public enum Mixins implements IMixins {
         .addRequiredMod(TargetedMod.THAUMCRAFT)
         .setApplyIf(() -> AngelicaConfig.enableIris)
         .addClientMixins("client.thaumcraft.MixinItemThaumometerRenderer")
+    ),
+
+    THAUMCRAFT_PORTALS(new MixinBuilder("Draw Thaumcraft's end portal styled planes in a more optimized way, and make it work with shaderpacks")
+        .setPhase(Phase.LATE)
+        .addRequiredMod(TargetedMod.THAUMCRAFT)
+        .addClientMixins(
+            "client.thaumcraft.MixinTileEldritchObeliskRenderer",
+            "client.thaumcraft.MixinTileEldritchNothingRenderer",
+            "client.thaumcraft.MixinTileEldritchLockRenderer",
+            "client.thaumcraft.MixinTileHoleRenderer",
+            "client.thaumcraft.MixinTileMirrorRenderer",
+            "client.thaumcraft.MixinTileHole",
+            "client.thaumcraft.MixinTileEldritchNothing",
+            "client.thaumcraft.MixinBlockHole")
     ),
 
     THAUMCRAFT_TESR_JAR_CACHE(new MixinBuilder("Batch TC4 jar liquid via the retained TESR mesh cache")
@@ -455,6 +475,7 @@ public enum Mixins implements IMixins {
             , "celeritas.terrain.MixinWorld_AwaitingDescriptor"
             , "celeritas.terrain.MixinRenderRegion"
             , "celeritas.terrain.MixinChunkRenderList"
+            , "celeritas.terrain.MixinChunkMeshBufferBuilder"
             , "celeritas.terrain.MixinVisibleChunkCollector"
             , "celeritas.terrain.MixinRenderListManager"
             , "celeritas.terrain.MixinSectionRenderDataStorage"

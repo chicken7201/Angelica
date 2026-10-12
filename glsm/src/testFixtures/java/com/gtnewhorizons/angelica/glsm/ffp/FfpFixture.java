@@ -1,20 +1,21 @@
 package com.gtnewhorizons.angelica.glsm.ffp;
 
+import com.gtnewhorizon.gtnhlib.client.renderer.vertex.VertexFormat;
+import com.gtnewhorizon.gtnhlib.client.renderer.vertex.VertexFormatElement;
+import com.gtnewhorizon.gtnhlib.client.renderer.vertex.VertexFormatElement.Usage;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
+import com.gtnewhorizons.angelica.glsm.GlTestSupport;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL15;
-import org.lwjgl.opengl.GL20;
 
 import java.nio.ByteBuffer;
 import java.util.function.IntFunction;
 
 import static com.gtnewhorizon.gtnhlib.bytebuf.MemoryUtilities.memAddress0;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.fail;
 
 public final class FfpFixture {
 
@@ -125,32 +126,34 @@ public final class FfpFixture {
         }
 
         private static int buildProgram() {
-            final int vs = compile(GL20.GL_VERTEX_SHADER, VS);
-            final int fs = compile(GL20.GL_FRAGMENT_SHADER, FS);
-            final int p = GLStateManager.glCreateProgram();
-            GLStateManager.glAttachShader(p, vs);
-            GLStateManager.glAttachShader(p, fs);
-            GLStateManager.glLinkProgram(p);
-            assertNotEquals(0, GLStateManager.glGetProgrami(p, GL20.GL_LINK_STATUS), () -> "test program must link: " + GLStateManager.glGetProgramInfoLog(p, 4096));
-            GLStateManager.glDeleteShader(vs);
-            GLStateManager.glDeleteShader(fs);
-            return p;
-        }
-
-        private static int compile(int type, String source) {
-            final int shader = GLStateManager.glCreateShader(type);
-            GLStateManager.glShaderSource(shader, source);
-            GLStateManager.glCompileShader(shader);
-            if (GLStateManager.glGetShaderi(shader, GL20.GL_COMPILE_STATUS) == 0) {
-                fail("test shader failed to compile:\n" + GLStateManager.glGetShaderInfoLog(shader, 4096) + "\n\n" + source);
-            }
-            return shader;
+            return GlTestSupport.program(VS, FS);
         }
     }
 
     public static void attrib(int loc, int size, int type, boolean normalized, int stride, int offset) {
         GLStateManager.glEnableVertexAttribArray(loc);
         GLStateManager.glVertexAttribPointer(loc, size, type, normalized, stride, offset);
+    }
+
+    private static boolean formatRoutingRegistered;
+    private static boolean routeFormats;
+
+    public static void routeVertexFormats(boolean enabled) {
+        routeFormats = enabled;
+        if (formatRoutingRegistered) return;
+        formatRoutingRegistered = true;
+        VertexFormat.registerSetupBufferStateOverride((format, offset) -> {
+            if (!routeFormats) return false;
+            final int stride = format.getVertexSize();
+            int elementOffset = (int) offset;
+            for (VertexFormatElement element : format.elementsArray) {
+                final Usage usage = element.getUsage();
+                final boolean normalized = usage == Usage.COLOR || usage == Usage.NORMAL;
+                attrib(usage.getAttributeLocation(), element.getCount(), element.getType().getGlType(), normalized, stride, elementOffset);
+                elementOffset += element.getByteSize();
+            }
+            return true;
+        });
     }
 
     public static void clear() {

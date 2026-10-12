@@ -1585,6 +1585,7 @@ public final class ResourceManager {
     public boolean arenaUpload(ByteBuffer data, long dstHandle, long dstOffset, boolean cycle) {
         final FrameManager.FrameState f = frameManager.frame();
         final int size = data.remaining();
+        if (size == 0) return true;
         if (!f.arena.fits(size)) {
             return false;
         }
@@ -1682,6 +1683,7 @@ public final class ResourceManager {
         if (srcOff < 0 || size < 0 || srcOff + size > src.capacity()) {
             throw new IllegalStateException("uploadRangeToBuffer: bad source range srcOff=" + srcOff + " size=" + size + " src.capacity=" + src.capacity());
         }
+        if (size == 0) return;
         final long xfer = acquireTransferBuffer(size);
         if (xfer == 0) return;
 
@@ -2383,6 +2385,18 @@ public final class ResourceManager {
     public int nextAttribRingChunkOffset() {
         final int chunk = 1 + (int) (attribRingCounter.getAndIncrement() % (ATTRIB_RING_CHUNKS - 1));
         return chunk * ATTRIB_RING_CHUNK_BLOCKS * DUMMY_VBO_SIZE;
+    }
+
+    public long createVertexBuffer(int size) {
+        try (var stack = stackPush()) {
+            final long handle = SDL_CreateGPUBuffer(device.getDevice(), SDL_GPUBufferCreateInfo.calloc(stack).usage(SDL_GPU_BUFFERUSAGE_VERTEX).size(size));
+            if (handle == 0) {
+                LOG.error("Failed to create vertex buffer size={}: {}", size, SDLError.SDL_GetError());
+                return 0;
+            }
+            trackBufferHandle(handle);
+            return handle;
+        }
     }
 
     public long getOrCreateDummyVertexBuffer() {

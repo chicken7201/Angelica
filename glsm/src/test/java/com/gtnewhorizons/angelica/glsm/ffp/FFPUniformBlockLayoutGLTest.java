@@ -54,7 +54,7 @@ class FFPUniformBlockLayoutGLTest {
     void driverOffsetsMatchJavaConstants() {
         final VertexKey vk = VertexKey.fromState(false, false, false, false, 0);
         final FragmentKey fk = FragmentKey.fromState();
-        final Program program = Program.create(vk, fk, VertexShaderGenerator.generate(vk), FragmentShaderGenerator.generate(fk), null);
+        final Program program = Program.create(vk, fk, VertexShaderGenerator.generate(vk), FragmentShaderGenerator.generate(fk));
         try {
             final int programId = program.getProgramId();
             final int blockIndex = GL31.glGetUniformBlockIndex(programId, FFPUniformBlock.BLOCK_NAME);
@@ -94,7 +94,7 @@ class FFPUniformBlockLayoutGLTest {
 
         final FragmentKey fragment = FragmentKey.fromState();
         final Program program = Program.create(weather, fragment, source,
-            FragmentShaderGenerator.generate(fragment), null);
+            FragmentShaderGenerator.generate(fragment));
         final int previousProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
         try {
             final int blockIndex = GL31.glGetUniformBlockIndex(program.getProgramId(), FFPUniformBlock.BLOCK_NAME);

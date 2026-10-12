@@ -156,6 +156,11 @@ class UnicodeLoadingTextureGLTest {
         /** Applies the fixture's upload adapter before either successful registration or its simulated failure. */
         protected void prepareLiveTexture(DynamicTexture texture) {
             if (!GL11.glIsTexture(texture.glTextureId)) {
+                // This JVM has no TextureUtil redirector: vanilla deletes then binds its generated name,
+                // which is illegal in core GL. Account for that exact fixture error before the real upload.
+                assertEquals(GL11.GL_INVALID_OPERATION, GL11.glGetError(),
+                    "untransformed vanilla allocation must be the source of the fixture error");
+                assertEquals(GL11.GL_NO_ERROR, GL11.glGetError(), "no additional fixture errors are expected");
                 FontProviderUnicode.withPageTextureBindingPreserved(() -> {
                     texture.glTextureId = GLStateManager.glGenTextures();
                     GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, texture.glTextureId);
@@ -167,6 +172,7 @@ class UnicodeLoadingTextureGLTest {
                         GL12.GL_BGRA, GL12.GL_UNSIGNED_INT_8_8_8_8_REV, data);
                     return null;
                 });
+                assertEquals(GL11.GL_NO_ERROR, GL11.glGetError(), "the adapted Unicode upload must be error-free");
             }
         }
     }

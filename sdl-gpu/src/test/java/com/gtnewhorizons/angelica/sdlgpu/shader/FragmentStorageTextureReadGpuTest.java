@@ -1,9 +1,12 @@
 package com.gtnewhorizons.angelica.sdlgpu.shader;
 
+import com.gtnewhorizons.angelica.sdlgpu.RealDeviceExtension;
 import com.gtnewhorizons.angelica.sdlgpu.SdlTestRig;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL20;
@@ -25,11 +28,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.fail;
 import static org.lwjgl.sdl.SDLGPU.*;
 
+@ExtendWith(RealDeviceExtension.class)
+@Tag("sdl-gpu-device")
 class FragmentStorageTextureReadGpuTest {
 
     private static SdlTestRig rig;
@@ -40,13 +43,8 @@ class FragmentStorageTextureReadGpuTest {
 
     @BeforeAll
     static void setUp() throws Exception {
-        rig = SdlTestRig.acquireRealDevice();
+        rig = RealDeviceExtension.rig();
         sm = new ShaderManager(rig.device);
-    }
-
-    @AfterAll
-    static void tearDown() {
-        SdlTestRig.releaseRealDevice();
     }
 
     private static final String VERTEX = String.join("\n",
@@ -254,6 +252,9 @@ class FragmentStorageTextureReadGpuTest {
         return file;
     }
 
-    @Test void fragmentImageLoadReadsCorrectTexels_noSamplers() throws IOException { runCase(0); }
-    @Test void fragmentImageLoadReadsCorrectTexels_twoSamplers() throws IOException { runCase(2); }
+    @ParameterizedTest(name = "{0} samplers")
+    @ValueSource(ints = {0, 2})
+    void fragmentImageLoadReadsCorrectTexels(int samplerCount) throws IOException {
+        runCase(samplerCount);
+    }
 }
