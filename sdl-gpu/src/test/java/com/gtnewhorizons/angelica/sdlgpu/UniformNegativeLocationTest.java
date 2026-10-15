@@ -27,9 +27,10 @@ class UniformNegativeLocationTest {
     private ShaderManager.ProgramObject prog;
     private UniformStaging us;
 
+    /** Initializes the resources and state required by the test. */
     @BeforeEach
     void setUp() {
-        applier = new PipelineApplier(null, null, null, null, null, null, null, null, null);
+        applier = new PipelineApplier(null, null, null, null, null, null, null, null, null, null);
         st = new ContextState();
         prog = new ShaderManager.ProgramObject();
         prog.linked = true;

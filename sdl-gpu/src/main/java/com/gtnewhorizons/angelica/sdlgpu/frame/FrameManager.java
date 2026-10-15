@@ -290,13 +290,22 @@ public final class FrameManager {
         f.emptyFramesThisFrame++;
     }
 
-    static boolean swapchainClearNeedsPassBreak(ContextState st, FrameState f) {
-        return (st.pendingSwapchainClear || st.pendingSwapchainDepthClear || st.pendingSwapchainStencilClear) && f.renderPass != 0 && f.activeLayoutHash == FBO0_LAYOUT_HASH;
+    /** Checks whether the current render pass targets the default framebuffer. */
+    private static boolean isFbo0PassOpen(FrameState f) {
+        return f.renderPass != 0 && f.activeLayoutHash == FBO0_LAYOUT_HASH;
     }
 
+    /** Checks whether pending default-framebuffer clears allow reusing the pass. */
+    public static boolean fbo0PassStaysOpen(ContextState st, FrameState f) {
+        return isFbo0PassOpen(f)
+            && !st.pendingSwapchainClear && !st.pendingSwapchainDepthClear && !st.pendingSwapchainStencilClear;
+    }
+
+    /** Opens the default-framebuffer pass with its pending clear state. */
     public boolean ensureFbo0RenderPass(FrameState f, ContextState st) {
+        if (fbo0PassStaysOpen(st, f)) return false;
         final boolean clearColor = st.pendingSwapchainClear;
-        if (swapchainClearNeedsPassBreak(st, f)) {
+        if (isFbo0PassOpen(f)) {
             endRenderPassIfActive(f, PASS_END_CLEAR);
         }
         final boolean applied = ensureFbo0RenderPass(f,
@@ -314,11 +323,9 @@ public final class FrameManager {
         return true;
     }
 
+    /** Opens the default-framebuffer pass with its pending clear state. */
     private boolean ensureFbo0RenderPass(FrameState f, float clearR, float clearG, float clearB, float clearA, boolean clear, boolean clearDepth, float depthValue, boolean clearStencil, int stencilValue) {
         if (!finalTarget.isReady() || f.commandBuffer == 0) return false;
-        if (f.renderPass != 0 && f.activeLayoutHash == FBO0_LAYOUT_HASH) {
-            return false;
-        }
 
         endActiveEncoders(f, PASS_END_TARGET);
 
@@ -439,6 +446,7 @@ public final class FrameManager {
 
     public void noteInPassClear() { frame().inPassClearsThisFrame++; }
 
+    /** Begins a render pass and records writes to its attachments. */
     public long beginRenderPass(SDL_GPUColorTargetInfo.Buffer colorTargets, SDL_GPUDepthStencilTargetInfo depthTarget) {
         final FrameState f = frame();
         endActiveEncoders(f, PASS_END_TARGET);
@@ -452,6 +460,14 @@ public final class FrameManager {
         f.fboPassesThisFrame++;
         f.currentColorTarget = colorTargets != null && colorTargets.remaining() > 0 ? colorTargets.texture() : 0;
         f.currentDepthTarget = depthTarget != null ? MemoryAccess.getAddress(depthTarget.address() + SDL_GPUDepthStencilTargetInfo.TEXTURE) : 0;
+        if (resourceManager != null) {
+            if (colorTargets != null) {
+                for (int i = colorTargets.position(); i < colorTargets.limit(); i++) {
+                    resourceManager.markTextureWritten(MemoryAccess.getAddress(colorTargets.address(i) + SDL_GPUColorTargetInfo.TEXTURE));
+                }
+            }
+            resourceManager.markTextureWritten(f.currentDepthTarget);
+        }
         return f.renderPass;
     }
 

@@ -44,6 +44,7 @@ class DepthStencilReadbackTest {
     private static FrameManager frameManager;
     private static ShaderManager sm;
     private static PipelineStore store;
+    private static FullscreenPass fullscreen;
     private static FBOClearTracker clearTracker;
     private static TextureOps textureOps;
     private static AttachmentClear attachmentClear;
@@ -52,6 +53,7 @@ class DepthStencilReadbackTest {
     private static long depthTexture;
     private static int depthFormat;
 
+    /** Initializes the resources and state required by the test. */
     @BeforeAll
     static void setUp() throws Exception {
         rig = RealDeviceExtension.rig();
@@ -60,8 +62,9 @@ class DepthStencilReadbackTest {
         store = new PipelineStore(rig.device);
         clearTracker = new FBOClearTracker(frameManager, rig.resourceManager, sm);
         textureOps = new TextureOps(rig.device, frameManager, rig.resourceManager, clearTracker);
-        attachmentClear = new AttachmentClear(frameManager, store, sm);
-        readback = new DepthStencilReadback(frameManager, rig.resourceManager, store, sm, clearTracker);
+        fullscreen = new FullscreenPass(sm, rig.device);
+        attachmentClear = new AttachmentClear(frameManager, store, fullscreen);
+        readback = new DepthStencilReadback(frameManager, rig.resourceManager, store, fullscreen, clearTracker);
         st = new ContextState();
 
         final RealDeviceExtension.Target depth = RealDeviceExtension.depthStencilTarget(9801, W, H);
@@ -69,6 +72,7 @@ class DepthStencilReadbackTest {
         depthFormat = depth.sdlFormat();
     }
 
+    /** Releases the resources created by the test fixture. */
     @AfterAll
     static void tearDown() {
         if (frameManager != null && frameManager.isFrameActive()) frameManager.endFrame();
@@ -77,6 +81,8 @@ class DepthStencilReadbackTest {
             readback.shutdown();
         }
         if (store != null) store.shutdown();
+        if (fullscreen != null) fullscreen.shutdown();
+        if (sm != null) sm.shutdown();
     }
 
     private static void clearRegion(float depth, int stencil) {

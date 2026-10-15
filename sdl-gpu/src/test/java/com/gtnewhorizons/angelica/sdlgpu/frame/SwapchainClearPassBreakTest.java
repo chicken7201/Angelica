@@ -2,7 +2,7 @@ package com.gtnewhorizons.angelica.sdlgpu.frame;
 
 import org.junit.jupiter.api.Test;
 
-import static com.gtnewhorizons.angelica.sdlgpu.frame.FrameManager.swapchainClearNeedsPassBreak;
+import static com.gtnewhorizons.angelica.sdlgpu.frame.FrameManager.fbo0PassStaysOpen;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -15,29 +15,33 @@ class SwapchainClearPassBreakTest {
         return f;
     }
 
+    /** Verifies a pending color clear breaks the active pass. */
     @Test
     void aPendingColorClearBreaksTheActivePass() {
         final ContextState st = new ContextState();
         st.pendingSwapchainClear = true;
-        assertTrue(swapchainClearNeedsPassBreak(st, activeFbo0Pass()), "otherwise the clear is deferred to the next pass and wipes what this one drew");
+        assertFalse(fbo0PassStaysOpen(st, activeFbo0Pass()), "otherwise the clear is deferred to the next pass and wipes what this one drew");
     }
 
+    /** Verifies a pending depth or stencil clear breaks the active pass. */
     @Test
     void aPendingDepthOrStencilClearBreaksTheActivePass() {
         final ContextState depth = new ContextState();
         depth.pendingSwapchainDepthClear = true;
-        assertTrue(swapchainClearNeedsPassBreak(depth, activeFbo0Pass()));
+        assertFalse(fbo0PassStaysOpen(depth, activeFbo0Pass()));
 
         final ContextState stencil = new ContextState();
         stencil.pendingSwapchainStencilClear = true;
-        assertTrue(swapchainClearNeedsPassBreak(stencil, activeFbo0Pass()));
+        assertFalse(fbo0PassStaysOpen(stencil, activeFbo0Pass()));
     }
 
+    /** Verifies nothing pending leaves the pass alone. */
     @Test
     void nothingPendingLeavesThePassAlone() {
-        assertFalse(swapchainClearNeedsPassBreak(new ContextState(), activeFbo0Pass()));
+        assertTrue(fbo0PassStaysOpen(new ContextState(), activeFbo0Pass()));
     }
 
+    /** Verifies a clear with no active pass needs no break. */
     @Test
     void aClearWithNoActivePassNeedsNoBreak() {
         final ContextState st = new ContextState();
@@ -45,9 +49,10 @@ class SwapchainClearPassBreakTest {
 
         final FrameManager.FrameState f = activeFbo0Pass();
         f.renderPass = 0;
-        assertFalse(swapchainClearNeedsPassBreak(st, f));
+        assertFalse(fbo0PassStaysOpen(st, f));
     }
 
+    /** Verifies a pass bound to an fbo is not the fbo0 pass. */
     @Test
     void aPassBoundToAnFboIsNotTheFbo0Pass() {
         final ContextState st = new ContextState();
@@ -55,6 +60,6 @@ class SwapchainClearPassBreakTest {
 
         final FrameManager.FrameState f = activeFbo0Pass();
         f.activeLayoutHash = 0xF80L;
-        assertFalse(swapchainClearNeedsPassBreak(st, f));
+        assertFalse(fbo0PassStaysOpen(st, f));
     }
 }

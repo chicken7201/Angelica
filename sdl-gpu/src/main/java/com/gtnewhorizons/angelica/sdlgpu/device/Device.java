@@ -361,6 +361,11 @@ public final class Device {
         return isMetal(driverName);
     }
 
+    /** Reports whether the SDL device uses the Vulkan backend. */
+    public boolean isVulkan() {
+        return isVulkan(driverName);
+    }
+
     public boolean isFencePollEnabled() {
         return fencePollEnabled;
     }

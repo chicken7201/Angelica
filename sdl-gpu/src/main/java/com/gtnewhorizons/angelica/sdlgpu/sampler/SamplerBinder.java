@@ -118,6 +118,7 @@ public final class SamplerBinder {
         st.lastAppliedSamplerCb = bindCb;
     }
 
+    /** Binds resolved texture units to the selected shader stage. */
     private void bindStageSamplers(long renderPass, ContextState st, ShaderManager.ProgramObject prog, long fallbackTexture, boolean fragment) {
         final LogicOpVariant variant = fragment ? st.activeLogicOpVariant : null;
         final int raw = variant != null ? variant.numSamplers : fragment ? prog.fragmentResources.numSamplers() : prog.vertexResources.numSamplers();
@@ -149,7 +150,7 @@ public final class SamplerBinder {
                 continue;
             }
             final int glUnit = samplerUnits[i];
-            final int glTexId = (glUnit >= 0 && glUnit < st.boundTextures.length) ? st.boundTextures[glUnit] : 0;
+            final int glTexId = st.boundTexture(glUnit);
             long texHandle = (glTexId != 0) ? resourceManager.getTextureHandle(glTexId) : 0;
             if (texHandle == 0) {
                 texHandle = fallbackTexture;

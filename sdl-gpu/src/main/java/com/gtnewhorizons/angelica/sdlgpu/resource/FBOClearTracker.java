@@ -74,6 +74,7 @@ public final class FBOClearTracker {
         st.lastFlushedPendingMutationGen = st.pendingMutationGen;
     }
 
+    /** Flushes pending clears before bound samplers read their textures. */
     public void flushPendingClearsForBoundSamplers(ContextState st) {
         if (st.pendingColorTextures.isEmpty() && st.pendingDepthTextures.isEmpty() && st.pendingStencilTextures.isEmpty()) return;
 
@@ -106,17 +107,23 @@ public final class FBOClearTracker {
         final int vertSamplers = Math.min(prog.vertexResources.numSamplers(), ContextState.MAX_SAMPLERS);
         collectSamplerFlush(st, SamplerLookup.resolvedUnits(prog, false), vertSamplers, colorHandles, colorGlIds, depthHandles, depthGlIds);
 
+        if (prog.hasReadMovedSamplers) {
+            final int[] fragMoved = SamplerLookup.movedSamplerUnits(prog, true);
+            collectSamplerFlush(st, fragMoved, fragMoved.length, colorHandles, colorGlIds, depthHandles, depthGlIds);
+            final int[] vertMoved = SamplerLookup.movedSamplerUnits(prog, false);
+            collectSamplerFlush(st, vertMoved, vertMoved.length, colorHandles, colorGlIds, depthHandles, depthGlIds);
+        }
+
         if (!colorHandles.isEmpty() || !depthHandles.isEmpty()) {
             materializeFlush(st, colorHandles, colorGlIds, depthHandles, depthGlIds);
         }
         snapshotFlushGenerations(st);
     }
 
+    /** Collects pending clears for the textures used by one sampler stage. */
     private void collectSamplerFlush(ContextState st, int[] samplerUnits, int samplerCount, LongArrayList colorHandles, IntArrayList colorGlIds, LongArrayList depthHandles, IntArrayList depthGlIds) {
         for (int i = 0; i < samplerCount; i++) {
-            final int glUnit = samplerUnits[i];
-            if (glUnit < 0 || glUnit >= st.boundTextures.length) continue;
-            final int glTexId = st.boundTextures[glUnit];
+            final int glTexId = st.boundTexture(samplerUnits[i]);
             if (glTexId == 0) continue;
             final long handle = resourceManager.getTextureHandle(glTexId);
             if (handle == 0) continue;

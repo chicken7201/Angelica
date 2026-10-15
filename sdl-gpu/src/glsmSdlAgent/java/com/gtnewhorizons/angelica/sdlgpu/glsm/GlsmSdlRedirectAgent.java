@@ -37,11 +37,14 @@ public final class GlsmSdlRedirectAgent {
 
         private final GLSMRedirector redirector = new GLSMRedirector();
 
+        /** Instruments GLSM classes with the SDL test redirects and sampler probes. */
         @Override
         public byte[] transform(ClassLoader loader, String className, Class<?> redefined, ProtectionDomain domain, byte[] classfile) {
-            if (className == null || !className.startsWith(GTNHLIB)) return null;
+            if (className == null) return null;
             try {
-                if (!redirector.shouldTransform(classfile)) return null;
+                final byte[] observed = MovedSamplerProbe.instrument(className, classfile);
+                if (observed != null) return observed;
+                if (!className.startsWith(GTNHLIB) || !redirector.shouldTransform(classfile)) return null;
                 final ClassNode node = new ClassNode();
                 new ClassReader(classfile).accept(node, 0);
                 if (!redirector.transformClassNode(className.replace('/', '.'), node)) return null;

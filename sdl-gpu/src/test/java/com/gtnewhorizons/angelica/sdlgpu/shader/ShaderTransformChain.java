@@ -34,9 +34,10 @@ final class ShaderTransformChain {
         return edit(source, (index, edits) -> ClipZRemap.collectEdits(index.root(), edits));
     }
 
+    /** Removes unused sampler declarations from a test shader. */
     static String stripUnused(String source) {
         if (!source.contains("sampler")) return source;
-        return edit(source, SamplerStripper::collectEdits);
+        return edit(source, (index, edits) -> SamplerStripper.collectEdits(index, TextureDeclarations.collect(index), edits));
     }
 
     static String inject(String source, PerFrameUniformBlock perFrame, PerFrameUniformBlock perPass) {

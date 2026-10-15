@@ -221,8 +221,9 @@ public final class ResourceManager {
         return createTextureCore(glId, glTarget, sdlFormat, glFormat, width, height, depth, levels, usage);
     }
 
+    /** Selects default SDL texture usages supported by the format. */
     private static int defaultUsage(int sdlFormat) {
-        if (isDepthFormat(sdlFormat)) {
+        if (PixelOps.isDepthFormat(sdlFormat)) {
             return SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
         }
         if (isIntegerFormat(sdlFormat)) {
@@ -365,12 +366,14 @@ public final class ResourceManager {
         releaseTextureHandleAfterPendingUploads(handle);
     }
 
+    /** Releases a texture handle after queued uploads finish. */
     private void releaseTextureHandleAfterPendingUploads(long handle) {
         if (handle == 0) return;
         if (shouldDeferTextureRelease()) {
             releaseTextureDeferred(handle);
             return;
         }
+        notifyTextureReleased(handle);
         releaseTextureHandle(handle);
     }
 
@@ -393,6 +396,52 @@ public final class ResourceManager {
     }
 
     private final LongOpenHashSet definedContentTextures = new LongOpenHashSet();
+    private volatile Long2ObjectOpenHashMap<AtomicLong> textureWriteVersions = new Long2ObjectOpenHashMap<>();
+    private final AtomicLong textureWriteGeneration = new AtomicLong();
+
+    /** Enables version tracking for writes to a texture. */
+    public void trackTextureWrites(long handle) {
+        if (handle != 0) setWriteTracking(handle, true);
+    }
+
+    /** Stops tracking writes to a texture. */
+    public void stopTrackingTextureWrites(long handle) {
+        if (textureWriteVersions.containsKey(handle)) setWriteTracking(handle, false);
+    }
+
+    /** Updates the tracked texture set and its cached lookup. */
+    private void setWriteTracking(long handle, boolean track) {
+        wLock.lock();
+        try {
+            if (textureWriteVersions.containsKey(handle) == track) return;
+            final Long2ObjectOpenHashMap<AtomicLong> versions = new Long2ObjectOpenHashMap<>(textureWriteVersions);
+            if (track) versions.put(handle, new AtomicLong());
+            else versions.remove(handle);
+            textureWriteVersions = versions;
+            textureWriteGeneration.incrementAndGet();
+        } finally {
+            wLock.unlock();
+        }
+    }
+
+    /** Returns the generation of all tracked texture writes. */
+    public long textureWriteGeneration() {
+        return textureWriteGeneration.get();
+    }
+
+    /** Returns the last write version of the selected texture. */
+    public long textureWriteVersion(long handle) {
+        final AtomicLong version = textureWriteVersions.get(handle);
+        return version == null ? 0 : version.get();
+    }
+
+    /** Advances the write version for a tracked texture. */
+    public void markTextureWritten(long handle) {
+        final AtomicLong version = textureWriteVersions.get(handle);
+        if (version == null) return;
+        version.incrementAndGet();
+        textureWriteGeneration.incrementAndGet();
+    }
 
     public boolean isTextureContentDefined(long handle) {
         if (handle == 0) return false;
@@ -444,10 +493,12 @@ public final class ResourceManager {
         }
     }
 
+    /** Releases a texture handle and notifies dependent resource owners. */
     public void releaseTextureHandle(long handle) {
         if (handle == 0) return;
         dropBatchedUploadsTargeting(handle);
         markTextureContentUndefined(handle);
+        stopTrackingTextureWrites(handle);
         final boolean live;
         wLock.lock();
         try {
@@ -605,7 +656,8 @@ public final class ResourceManager {
         return true;
     }
 
-    private boolean copyAllMips(long srcTex, long dstTex, int glTarget, int width, int height, int depth, int levels) {
+    /** Copies every mip level and records writes to the destination texture. */
+    public boolean copyAllMips(long srcTex, long dstTex, int glTarget, int width, int height, int depth, int levels) {
         final long cp = frameManager.ensureCopyPass();
         if (cp == 0) return false;
         flushBatchedUploads(cp);
@@ -625,6 +677,7 @@ public final class ResourceManager {
                 }
             }
         }
+        markTextureWritten(dstTex);
         return true;
     }
 
@@ -830,6 +883,7 @@ public final class ResourceManager {
         }
     }
 
+    /** Queues a texture for release after pending GPU work. */
     public void releaseTextureDeferred(long handle) {
         if (handle == 0) return;
         wLock.lock();
@@ -838,6 +892,20 @@ public final class ResourceManager {
         } finally {
             wLock.unlock();
         }
+        notifyTextureReleased(handle);
+    }
+
+    private LongConsumer textureReleaseListener;
+
+    /** Registers a callback for texture-handle releases. */
+    public void setTextureReleaseListener(LongConsumer listener) {
+        textureReleaseListener = listener;
+    }
+
+    /** Notifies the registered owner that a texture was released. */
+    private void notifyTextureReleased(long handle) {
+        final LongConsumer listener = textureReleaseListener;
+        if (listener != null) listener.accept(handle);
     }
 
     private static volatile boolean singleThreadedReads;
@@ -1753,6 +1821,7 @@ public final class ResourceManager {
         }
     }
 
+    /** Clears a three-dimensional texture region through the copy pass. */
     public boolean zeroTexture3D(long copyPass, long gpuTexture, int w, int h, int d, int level, int bytesPerTexel) {
         final long sliceBytes = (long) w * h * bytesPerTexel;
         if (sliceBytes <= 0 || sliceBytes > Integer.MAX_VALUE) return false;
@@ -1781,6 +1850,7 @@ public final class ResourceManager {
                 }
             }
             markTextureContentDefined(gpuTexture);
+            markTextureWritten(gpuTexture);
             frameManager.recordUploadCommands(sliceBytes * d, d);
             return true;
         } finally {
@@ -1790,6 +1860,7 @@ public final class ResourceManager {
 
     public static final int BATCH_SEGMENT_CAPACITY = 4 * 1024 * 1024;
 
+    /** Uploads pixel data and records the destination texture write. */
     public void uploadToTexture(long copyPass, ByteBuffer data, long gpuTexture, int x, int y, int w, int h, int level) {
         final FrameManager.FrameState f = frameManager.frame();
         final int size = data.remaining();
@@ -1834,6 +1905,8 @@ public final class ResourceManager {
         f.pendingTexLevels.add(level);
         f.pendingTexOffsets.add(f.batchOffset);
         f.batchOffset += size;
+        // Mark queued uploads now: sampler copies test freshness before the copy pass flushes them.
+        markTextureWritten(gpuTexture);
     }
 
     public void flushBatchedUploads(long copyPass) {
@@ -1922,6 +1995,7 @@ public final class ResourceManager {
         uploadRegionFromTransfer(copyPass, xfer, size, gpuTexture, level, x, y, 0, w, h, 1);
     }
 
+    /** Uploads a texture region from a transfer buffer. */
     private void uploadRegionFromTransfer(long copyPass, long xfer, long size, long tex, int level, int x, int y, int z, int w, int h, int d) {
         try {
             flushBatchedUploads(copyPass);
@@ -1937,6 +2011,7 @@ public final class ResourceManager {
                 SDL_UploadToGPUTexture(copyPass, src, dst, false);
             }
             markTextureContentDefined(tex);
+            markTextureWritten(tex);
             frameManager.recordUploadCommands(size, 1);
         } finally {
             returnTransferBufferThreadSafe(xfer, size);
@@ -1961,11 +2036,13 @@ public final class ResourceManager {
         return true;
     }
 
+    /** Queues a mapped transfer region for asynchronous texture upload. */
     private void enqueueMappedRegion(TransferThread tt, ContextState st, long xfer, long size, long tex, int level, int x, int y, int w, int h) {
         final long seq = TransferThread.nextSeq();
         st.frameHighestEnqueuedSeq = seq;
         lastTextureUploadSeq = seq;
         markTextureContentDefined(tex);
+        markTextureWritten(tex);
         tt.enqueue(TransferThread.TextureRegionUpload.acquire(xfer, tex, x, y, w, h, level, size, seq));
         tt.wake();
     }
@@ -2141,52 +2218,73 @@ public final class ResourceManager {
         return defaultSampler;
     }
 
+    /** Returns the shared fallback texture for ordinary sampling. */
     public long getOrCreateFallbackTexture() {
-        if (fallbackTexture != 0) return fallbackTexture;
-
-        try (var stack = stackPush()) {
-            final SDL_GPUTextureCreateInfo ci = SDL_GPUTextureCreateInfo.calloc(stack)
-                .type(SDL_GPU_TEXTURETYPE_2D)
-                .format(SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM)
-                .usage(SDL_GPU_TEXTUREUSAGE_SAMPLER)
-                .width(1)
-                .height(1)
-                .layer_count_or_depth(1)
-                .num_levels(1);
-
-            fallbackTexture = SDL_CreateGPUTexture(device.getDevice(), ci);
-            if (fallbackTexture == 0) {
-                LOG.error("Failed to create fallback texture: {}", SDLError.SDL_GetError());
-                return 0;
-            }
-            trackTextureHandle(fallbackTexture);
+        if (fallbackTexture == 0) {
+            fallbackTexture = createFallback(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+                SDL_GPU_TEXTUREUSAGE_SAMPLER, new byte[] { 0, 0, 0, (byte) 0xFF });
         }
-        // GL 4.4 sec 11.1.3.5: sampling an incomplete texture yields (0,0,0,1).
-        final byte[] texel = { 0, 0, 0, (byte) 0xFF };
-        seedOneTexel(fallbackTexture, texel);
         return fallbackTexture;
     }
 
-    private long fallbackStorageTexture3D;
-    public long getOrCreateFallbackStorageTexture3D() {
-        if (fallbackStorageTexture3D != 0) return fallbackStorageTexture3D;
+    /** Creates a matching texture with graphics storage-read usage. */
+    public long createStorageReadTexture(TextureMeta meta, int sdlFormat, int extraUsage) {
+        final int type = mapTextureType(meta.glTarget());
+        final int usage = SDL_GPU_TEXTUREUSAGE_GRAPHICS_STORAGE_READ | extraUsage;
+        if (!SDL_GPUTextureSupportsFormat(device.getDevice(), sdlFormat, type, usage)) return 0;
         try (var stack = stackPush()) {
             final SDL_GPUTextureCreateInfo ci = SDL_GPUTextureCreateInfo.calloc(stack)
-                .type(SDL_GPU_TEXTURETYPE_3D)
-                .format(SDL_GPU_TEXTUREFORMAT_R8_UINT)
-                .usage(SDL_GPU_TEXTUREUSAGE_GRAPHICS_STORAGE_READ
-                     | SDL_GPU_TEXTUREUSAGE_COMPUTE_STORAGE_READ
-                     | SDL_GPU_TEXTUREUSAGE_COMPUTE_STORAGE_WRITE)
-                .width(1).height(1).layer_count_or_depth(1).num_levels(1);
-            fallbackStorageTexture3D = SDL_CreateGPUTexture(device.getDevice(), ci);
-            if (fallbackStorageTexture3D == 0) {
-                LOG.error("Failed to create fallback storage 3D texture: {}", SDLError.SDL_GetError());
+                .type(type)
+                .format(sdlFormat)
+                .usage(usage)
+                .width(meta.width()).height(meta.height()).layer_count_or_depth(meta.depth()).num_levels(meta.levels());
+            final long handle = SDL_CreateGPUTexture(device.getDevice(), ci);
+            if (handle == 0) {
+                LOG.error("Failed to create storage-read texture {}x{} sdlFmt=0x{}: {}", meta.width(), meta.height(), Integer.toHexString(sdlFormat), SDLError.SDL_GetError());
                 return 0;
             }
-            trackTextureHandle(fallbackStorageTexture3D);
+            trackTextureHandle(handle);
+            return handle;
         }
-        seedOneTexel(fallbackStorageTexture3D, new byte[1]);
+    }
+
+    private long fallbackStorageTexture2D;
+    /** Returns the fallback two-dimensional storage-read texture. */
+    public long getOrCreateFallbackStorageTexture2D() {
+        if (fallbackStorageTexture2D == 0) {
+            fallbackStorageTexture2D = createFallback(SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+                SDL_GPU_TEXTUREUSAGE_GRAPHICS_STORAGE_READ, new byte[] { 0, 0, 0, (byte) 0xFF });
+        }
+        return fallbackStorageTexture2D;
+    }
+
+    private long fallbackStorageTexture3D;
+    /** Returns the fallback three-dimensional storage-read texture. */
+    public long getOrCreateFallbackStorageTexture3D() {
+        if (fallbackStorageTexture3D == 0) {
+            fallbackStorageTexture3D = createFallback(SDL_GPU_TEXTURETYPE_3D, SDL_GPU_TEXTUREFORMAT_R8_UINT,
+                SDL_GPU_TEXTUREUSAGE_GRAPHICS_STORAGE_READ | SDL_GPU_TEXTUREUSAGE_COMPUTE_STORAGE_READ
+                    | SDL_GPU_TEXTUREUSAGE_COMPUTE_STORAGE_WRITE, new byte[1]);
+        }
         return fallbackStorageTexture3D;
+    }
+
+    /** Creates and seeds a fallback texture with the requested usage. */
+    private long createFallback(int type, int format, int usage, byte[] texel) {
+        final long texture;
+        try (var stack = stackPush()) {
+            final SDL_GPUTextureCreateInfo ci = SDL_GPUTextureCreateInfo.calloc(stack)
+                .type(type).format(format).usage(usage)
+                .width(1).height(1).layer_count_or_depth(1).num_levels(1);
+            texture = SDL_CreateGPUTexture(device.getDevice(), ci);
+        }
+        if (texture == 0) {
+            LOG.error("Failed to create fallback texture (type={} format={} usage={}): {}", type, format, usage, SDLError.SDL_GetError());
+            return 0;
+        }
+        trackTextureHandle(texture);
+        seedOneTexel(texture, texel);
+        return texture;
     }
 
     private long fallbackStorageBuffer;
@@ -2257,6 +2355,7 @@ public final class ResourceManager {
         return handle;
     }
 
+    /** Uploads the fallback texel and records the texture write. */
     private void seedOneTexel(long texture, byte[] texel) {
         if (texture == 0) return;
         final long xfer = createTransferBuffer(texel.length);
@@ -2279,6 +2378,7 @@ public final class ResourceManager {
                     .w(1).h(1).d(1);
                 SDL_UploadToGPUTexture(copyPass, src, dst, false);
                 SDL_EndGPUCopyPass(copyPass);
+                markTextureWritten(texture);
             }
             Submits.submit(cb);
         }
@@ -2558,14 +2658,6 @@ public final class ResourceManager {
         };
     }
 
-    private static boolean isDepthFormat(int sdlFormat) {
-        return sdlFormat == SDL_GPU_TEXTUREFORMAT_D16_UNORM
-            || sdlFormat == SDL_GPU_TEXTUREFORMAT_D24_UNORM
-            || sdlFormat == SDL_GPU_TEXTUREFORMAT_D32_FLOAT
-            || sdlFormat == SDL_GPU_TEXTUREFORMAT_D24_UNORM_S8_UINT
-            || sdlFormat == SDL_GPU_TEXTUREFORMAT_D32_FLOAT_S8_UINT;
-    }
-
     static boolean isIntegerFormat(int sdlFormat) {
         return sdlFormat == SDL_GPU_TEXTUREFORMAT_R8_UINT
             || sdlFormat == SDL_GPU_TEXTUREFORMAT_R8G8_UINT
@@ -2604,6 +2696,7 @@ public final class ResourceManager {
         map.clear();
     }
 
+    /** Releases owned GPU resources and resets cached handles. */
     public void shutdown() {
         flushDeferredReleases();
 
@@ -2648,6 +2741,10 @@ public final class ResourceManager {
         if (fallbackStorageTexture3D != 0) {
             releaseTextureHandle(fallbackStorageTexture3D);
             fallbackStorageTexture3D = 0;
+        }
+        if (fallbackStorageTexture2D != 0) {
+            releaseTextureHandle(fallbackStorageTexture2D);
+            fallbackStorageTexture2D = 0;
         }
         synchronized (computeStandInTextures) {
             for (long handle : computeStandInTextures.values()) releaseTextureHandle(handle);

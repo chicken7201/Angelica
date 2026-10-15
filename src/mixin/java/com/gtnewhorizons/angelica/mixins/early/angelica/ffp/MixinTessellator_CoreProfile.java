@@ -1,6 +1,6 @@
 package com.gtnewhorizons.angelica.mixins.early.angelica.ffp;
 
-import com.gtnewhorizons.angelica.glsm.streaming.TessellatorStreamingDrawer;
+import com.gtnewhorizons.angelica.rendering.tesr.ModelPartBatcher;
 import net.minecraft.client.renderer.Tessellator;
 import org.objectweb.asm.Opcodes;
 import org.spongepowered.asm.mixin.Mixin;
@@ -15,8 +15,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Mixin(Tessellator.class)
 public class MixinTessellator_CoreProfile {
 
+    /** Routes core-profile tessellator draws through block-entity batching. */
     @Inject(method = "draw", at = @At(value = "FIELD", target = "Lnet/minecraft/client/renderer/Tessellator;isDrawing:Z", opcode = Opcodes.GETFIELD), cancellable = true)
     private void angelica$coreProfileDraw(CallbackInfoReturnable<Integer> cir) {
-        cir.setReturnValue(TessellatorStreamingDrawer.draw((Tessellator) (Object) this));
+        cir.setReturnValue(ModelPartBatcher.drawTessellator((Tessellator) (Object) this));
     }
 }
