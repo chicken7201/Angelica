@@ -241,6 +241,7 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 
 	private static final Vector4f EMPTY_CLEAR_COLOR = new Vector4f(1.0F);
 
+	/** Builds the deferred world pipeline and configures image-aware rendering passes. */
 	public DeferredWorldRenderingPipeline(ProgramSet programs) {
 		try {
 			Objects.requireNonNull(programs);
@@ -617,8 +618,8 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 						() -> usesSampler(IrisSamplers.USAGE_SHADOWTEX1));
 					Program shadowProgram = table.match(RenderCondition.SHADOW, SHADOW_INPUTS).getProgram();
 					Program shadowWaterProgram = table.match(RenderCondition.SHADOW_TRANSLUCENT, SHADOW_INPUTS).getProgram();
-					shadowRenderer.setUsesImages((shadowProgram != null && shadowProgram.getActiveImages() > 0) || (shadowWaterProgram != null && shadowWaterProgram.getActiveImages() > 0));
-					shadowRenderer.setPlayerReflectionCaptureEnabled((shadowProgram != null && GLStateManager.glGetUniformLocation(shadowProgram.getProgramId(), "playerAtlas_img") != -1) || (shadowWaterProgram != null && GLStateManager.glGetUniformLocation(shadowWaterProgram.getProgramId(), "playerAtlas_img") != -1));
+					shadowRenderer.setUsesImages(usesImages(shadowProgram) || usesImages(shadowWaterProgram));
+					shadowRenderer.setPlayerReflectionCaptureEnabled(usesImage(shadowProgram, "playerAtlas_img") || usesImage(shadowWaterProgram, "playerAtlas_img"));
 				} else {
 					shadowRenderer = null;
 				}
@@ -1589,6 +1590,16 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 
 	public boolean supportsInstancing(Instancing kind) {
 		return supportsInstancing[kind.ordinal()];
+	}
+
+	/** Checks whether a program uses images directly or through vertex-write replay. */
+	private boolean usesImages(@Nullable Program program) {
+		return program != null && (program.getActiveImages() > 0 || vertexWriteReplays.writesImages(program));
+	}
+
+	/** Checks whether a program accesses a named image directly or through replay. */
+	private boolean usesImage(@Nullable Program program, String image) {
+		return program != null && (GLStateManager.glGetUniformLocation(program.getProgramId(), image) != -1 || vertexWriteReplays.writesImage(program, image));
 	}
 
 	@Override

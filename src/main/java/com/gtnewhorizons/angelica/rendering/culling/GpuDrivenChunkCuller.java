@@ -41,6 +41,12 @@ public final class GpuDrivenChunkCuller {
 
     private int metaCapacityBytes;
 
+    private int savedProgram;
+    private int savedVisibleSsbo;
+    private int savedMetaSsbo;
+    private int savedIndirectSsbo;
+    private int savedFrustumUbo;
+
     public boolean ensureReady() {
         if (ready) return true;
         if (disabled) return false;
@@ -88,28 +94,34 @@ public final class GpuDrivenChunkCuller {
         GLStateManager.glBufferSubData(GL31.GL_UNIFORM_BUFFER, 0L, frustumUboBytes);
     }
 
-    public void dispatch(int visibleSsboGlId, int indirectSsboGlId, int visibleCount) {
-        if (!ready || visibleCount <= 0) return;
-        final int previousProgram = GLStateManager.getActiveProgram();
-        final int prevSsbo0 = RenderSystem.getIndexedBufferBinding(GL43.GL_SHADER_STORAGE_BUFFER, VISIBLE_SSBO_BINDING);
-        final int prevSsbo1 = RenderSystem.getIndexedBufferBinding(GL43.GL_SHADER_STORAGE_BUFFER, META_SSBO_BINDING);
-        final int prevSsbo2 = RenderSystem.getIndexedBufferBinding(GL43.GL_SHADER_STORAGE_BUFFER, INDIRECT_SSBO_BINDING);
-        final int prevUbo   = RenderSystem.getIndexedBufferBinding(GL31.GL_UNIFORM_BUFFER,        FRUSTUM_UBO_BINDING);
+    /** Saves current bindings and binds shared compute-culling resources once. */
+    void beginDispatches(int visibleSsboGlId, int indirectSsboGlId) {
+        savedProgram = GLStateManager.getActiveProgram();
+        savedVisibleSsbo  = RenderSystem.getIndexedBufferBinding(GL43.GL_SHADER_STORAGE_BUFFER, VISIBLE_SSBO_BINDING);
+        savedMetaSsbo     = RenderSystem.getIndexedBufferBinding(GL43.GL_SHADER_STORAGE_BUFFER, META_SSBO_BINDING);
+        savedIndirectSsbo = RenderSystem.getIndexedBufferBinding(GL43.GL_SHADER_STORAGE_BUFFER, INDIRECT_SSBO_BINDING);
+        savedFrustumUbo   = RenderSystem.getIndexedBufferBinding(GL31.GL_UNIFORM_BUFFER,        FRUSTUM_UBO_BINDING);
         GLStateManager.glUseProgram(program.handle());
         RenderSystem.bindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, VISIBLE_SSBO_BINDING,   visibleSsboGlId);
         RenderSystem.bindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, META_SSBO_BINDING,      metaSsboGlId);
         RenderSystem.bindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, INDIRECT_SSBO_BINDING,  indirectSsboGlId);
         RenderSystem.bindBufferBase(GL31.GL_UNIFORM_BUFFER,        FRUSTUM_UBO_BINDING,    frustumUboGlId);
+    }
 
+    /** Dispatches the compute culler for the supplied visible chunk count. */
+    void dispatch(int visibleCount) {
         final int groups = (visibleCount + LOCAL_SIZE_X - 1) / LOCAL_SIZE_X;
         GLStateManager.glDispatchCompute(groups, 1, 1);
-        GLStateManager.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT | GL42.GL_COMMAND_BARRIER_BIT);
+    }
 
-        RenderSystem.bindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, VISIBLE_SSBO_BINDING,   prevSsbo0);
-        RenderSystem.bindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, META_SSBO_BINDING,      prevSsbo1);
-        RenderSystem.bindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, INDIRECT_SSBO_BINDING,  prevSsbo2);
-        RenderSystem.bindBufferBase(GL31.GL_UNIFORM_BUFFER,        FRUSTUM_UBO_BINDING,    prevUbo);
-        GLStateManager.glUseProgram(previousProgram);
+    /** Restores the program and indexed buffer bindings after compute culling. */
+    void endDispatches() {
+        GLStateManager.glMemoryBarrier(GL43.GL_SHADER_STORAGE_BARRIER_BIT | GL42.GL_COMMAND_BARRIER_BIT);
+        RenderSystem.bindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, VISIBLE_SSBO_BINDING,   savedVisibleSsbo);
+        RenderSystem.bindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, META_SSBO_BINDING,      savedMetaSsbo);
+        RenderSystem.bindBufferBase(GL43.GL_SHADER_STORAGE_BUFFER, INDIRECT_SSBO_BINDING,  savedIndirectSsbo);
+        RenderSystem.bindBufferBase(GL31.GL_UNIFORM_BUFFER,        FRUSTUM_UBO_BINDING,    savedFrustumUbo);
+        GLStateManager.glUseProgram(savedProgram);
     }
 
     public synchronized void shutdown() {

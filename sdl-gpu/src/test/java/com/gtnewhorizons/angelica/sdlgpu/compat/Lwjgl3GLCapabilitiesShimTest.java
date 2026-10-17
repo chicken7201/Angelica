@@ -87,6 +87,22 @@ class Lwjgl3GLCapabilitiesShimTest {
         assertThrows(IllegalStateException.class, GL::getCapabilities, "clearing on release must stop the thread answering yes to runningOnRenderThread()");
     }
 
+    /** Verifies the SDL function provider exposes no native OpenGL entry points. */
+    @Test
+    void functionProviderResolvesEveryNameToAbsent() {
+        final boolean preinstalled = GL.getFunctionProvider() != null;
+        Lwjgl3GLCapabilitiesShim.installFunctionProvider();
+        try {
+            assertNotNull(GL.getFunctionProvider());
+            if (!preinstalled) {
+                assertEquals(0L, GL.getFunctionProvider().getFunctionAddress("glBindVertexArrayAPPLE"));
+            }
+            Lwjgl3GLCapabilitiesShim.installFunctionProvider();
+        } finally {
+            if (!preinstalled) GL.destroy();
+        }
+    }
+
     @Test
     void advertisedSetHasNoDuplicatesOrBlanks() {
         final Set<String> advertised = SDLGPURenderBackend.advertisedCapabilities();

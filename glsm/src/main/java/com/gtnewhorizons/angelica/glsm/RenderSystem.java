@@ -555,8 +555,9 @@ public class RenderSystem {
         return GLStateManager.glGenBuffers();
     }
 
+    /** Returns an indexed buffer binding from tracked state or the backend. */
     public static int getIndexedBufferBinding(int target, int index) {
-        return RENDER_BACKEND.getIndexedBufferBinding(target, index);
+        return GLStateManager.getIndexedBufferBinding(target, index);
     }
 
     public static void bindBufferBase(int target, int index, int buffer) {

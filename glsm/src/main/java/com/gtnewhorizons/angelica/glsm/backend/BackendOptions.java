@@ -20,8 +20,14 @@ public final class BackendOptions {
         return SystemProperties.SDL_GPU_OVERRIDE != null ? SystemProperties.SDL_GPU_OVERRIDE : configSdlGpu;
     }
 
+    /** Resolves the selected SDL GPU driver to its backend name. */
     public static String sdlGpuDriver() {
-        return SystemProperties.SDL_GPU_DRIVER_OVERRIDE != null ? SystemProperties.SDL_GPU_DRIVER_OVERRIDE : configDriver;
+        return sdlGpuDriver(configDriver);
+    }
+
+    /** Resolves the selected SDL GPU driver to its backend name. */
+    public static String sdlGpuDriver(String driver) {
+        return SystemProperties.SDL_GPU_DRIVER_OVERRIDE != null ? SystemProperties.SDL_GPU_DRIVER_OVERRIDE : driver;
     }
 
     public static boolean configSdlGpu() {

@@ -34,6 +34,7 @@ import com.gtnewhorizons.angelica.glsm.states.PixelStoreState;
 import com.gtnewhorizons.angelica.glsm.states.ImageUnitArray;
 import com.gtnewhorizons.angelica.glsm.states.SamplerUnitArray;
 import com.gtnewhorizons.angelica.glsm.states.TextureUnitArray;
+import com.gtnewhorizons.angelica.glsm.ffp.InstancedAttribs;
 import com.gtnewhorizons.angelica.glsm.ffp.Instancing;
 import com.gtnewhorizons.angelica.glsm.ffp.ShaderManager;
 import com.gtnewhorizons.angelica.glsm.ffp.VAOManager;
@@ -104,6 +105,8 @@ public class GLContextState {
     public boolean dirtyNormalAttrib;
     public boolean dirtyTexCoordAttrib;
     public boolean dirtyLightmapAttrib = true;
+    public long entityIds = InstancedAttribs.DEFAULT_ENTITY_IDS;
+    public boolean dirtyEntityIdsAttrib = true;
     public boolean unit23TexCoordSetDuringDraw = false;
     public int maxBoundTextureUnit = 0;
     public int maxBoundImageUnit = 0;
@@ -236,6 +239,8 @@ public class GLContextState {
     public int boundCopyReadBuffer;
     public int boundCopyWriteBuffer;
     public final Int2IntMap boundOtherBuffers = new Int2IntOpenHashMap();
+    public final int[] uniformBufferBindings = new int[GLStateManager.INDEXED_BUFFER_SLOTS];
+    public final int[] storageBufferBindings = new int[GLStateManager.INDEXED_BUFFER_SLOTS];
     public PixelStoreState pixelUnpackState = PixelStoreState.DEFAULT;
     public PixelStoreState pixelPackState = PixelStoreState.DEFAULT;
     public final int[] clientAttribSavedMask = new int[GLStateManager.CLIENT_ATTRIB_STACK_DEPTH];
@@ -245,7 +250,6 @@ public class GLContextState {
     public final int[] clientAttribSavedPackBuffer = new int[GLStateManager.CLIENT_ATTRIB_STACK_DEPTH];
     public final VAOManager.ClientArrays[] clientAttribSavedArrays = new VAOManager.ClientArrays[GLStateManager.CLIENT_ATTRIB_STACK_DEPTH];
     public int clientAttribStackPointer = 0;
-    public float maxPointSize = Float.NaN;
     public int restoreChangedMask;
     public long restoreUnitChangedMask;
     public final BlendState vanillaBlendBefore = new BlendState();

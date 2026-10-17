@@ -10,7 +10,6 @@ import com.gtnewhorizons.angelica.glsm.profiling.Tracy;
 import com.gtnewhorizons.angelica.glsm.texture.TextureInfo;
 import com.gtnewhorizons.angelica.glsm.texture.TextureInfoCache;
 import com.gtnewhorizons.angelica.mixins.interfaces.ModelBoxQuads;
-import com.gtnewhorizons.angelica.rendering.tesr.PassRebindGate;
 import lombok.Getter;
 import net.coderbot.iris.Iris;
 import net.coderbot.iris.gl.image.GlImage;
@@ -203,6 +202,7 @@ public final class PlayerReflectionCapture {
         return o;
     }
 
+    /** Rebinds the active world pass before drawing captured player reflection vertices. */
     public static void flush() {
         if (!pending) return;
         pending = false;
@@ -211,8 +211,8 @@ public final class PlayerReflectionCapture {
         final float[] xyzuv = vertexScratch;
         if (xyzuv == null || xyzuv.length < VERTEX_COUNT * FLOATS_PER_VERTEX) return;
 
-        PassRebindGate.rebindIfDirty();
         if (!(Iris.getPipelineManager().getPipelineNullable() instanceof DeferredWorldRenderingPipeline pipeline)) return;
+        pipeline.rebindCurrentPass();
         if (GLStateManager.getActiveProgram() != pipeline.getActivePassProgramId()) return;
 
         if (Tracy.ENABLED) Tracy.beginZone(Z_PLAYER_REFLECTION_FLUSH);

@@ -41,12 +41,13 @@ class GlsmSdlFfpTest {
         GlsmSdlHeadlessRig.endFrame();
     }
 
+    /** Restores material IDs after each SDL GPU instancing test. */
     @AfterEach
     void cleanupInstancing() {
         GLStateManager.setFfpInstancing(Instancing.NONE);
         CubeParityFixture.deleteResources();
         ParticleParityFixture.deleteResources();
-        FfpFixture.IntegerInstances.delete();
+        FfpFixture.EntityIdInstances.delete();
     }
 
     private static void bindBaseTexture() {
@@ -170,13 +171,14 @@ class GlsmSdlFfpTest {
         ParticleParityFixture.assertPixelParity(reference, instanced, SIZE, 0xFF000000, GlsmSdlHeadlessRig::describe);
     }
 
+    /** Verifies each instance receives its own normalized material IDs. */
     @Test
     void entityAttribSelectsColorPerInstance() {
-        FfpFixture.IntegerInstances.build(0.6f);
+        FfpFixture.EntityIdInstances.build(0.6f);
 
         GlsmSdlHeadlessRig.beginFrameAndClear();
 
-        FfpFixture.IntegerInstances.draw();
+        FfpFixture.EntityIdInstances.draw();
 
         final int[] pixels = GlsmSdlHeadlessRig.readTarget();
 

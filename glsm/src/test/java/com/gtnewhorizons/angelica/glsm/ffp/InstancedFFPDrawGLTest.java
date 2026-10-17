@@ -80,12 +80,13 @@ class InstancedFFPDrawGLTest {
         capturing = false;
     }
 
+    /** Restores material IDs after each instanced rendering test. */
     @AfterEach
     void cleanup() {
         GLSMHooks.pendingProgramSelection = null;
         GLSMHooks.blendHandler = null;
         log.clear();
-        FfpFixture.IntegerInstances.delete();
+        FfpFixture.EntityIdInstances.delete();
         FfpFixture.resetFfpState();
         CubeParityFixture.disableDirectionalLight();
         CubeParityFixture.deleteResources();
@@ -190,20 +191,21 @@ class InstancedFFPDrawGLTest {
         ParticleParityFixture.assertPixelParity(reference, instanced, PARITY_SIZE, 0xFF000000, pixel -> "0x" + Integer.toHexString(pixel));
     }
 
+    /** Verifies each instance receives its own normalized material IDs. */
     @Test
     void entityAttribSelectsColorPerInstance() {
         GLStateManager.glViewport(0, 0, INTEGER_WIDTH, INTEGER_HEIGHT);
         GLStateManager.disableDepthTest();
         GLStateManager.disableCull();
 
-        FfpFixture.IntegerInstances.build(0.66f);
+        FfpFixture.EntityIdInstances.build(0.66f);
 
         GLStateManager.glClearColor(0f, 0f, 0f, 1f);
         GLStateManager.glClear(GL11.GL_COLOR_BUFFER_BIT);
 
-        FfpFixture.IntegerInstances.draw();
+        FfpFixture.EntityIdInstances.draw();
 
-        assertEquals(GL11.GL_NO_ERROR, GL11.glGetError(), "instanced ivec4 draw must not raise a GL error");
+        assertEquals(GL11.GL_NO_ERROR, GL11.glGetError(), "instanced entity id draw must not raise a GL error");
 
         assertPixel(51, 50, 255, 0, 0, "entity -1 must render red");
         assertPixel(150, 50, 0, 255, 0, "entity 7 must render green");

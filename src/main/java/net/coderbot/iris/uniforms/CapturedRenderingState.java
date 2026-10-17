@@ -35,6 +35,7 @@ public class CapturedRenderingState {
 	@Getter
 	private int currentRenderedItem = -1;
 	private Runnable itemIdListener = null;
+	private Runnable entityIdsListener = null;
 	private final IntArrayList itemStack = new IntArrayList();
 	private final IntArrayList entityStack = new IntArrayList();
 	private final IntArrayList blockEntityStack = new IntArrayList();
@@ -81,6 +82,7 @@ public class CapturedRenderingState {
 		applyCurrentBlockEntity(blockEntityStack.popInt());
 	}
 
+	/** Updates the block entity ID and notifies material ID listeners. */
 	private void applyCurrentBlockEntity(int entity) {
 		if (currentRenderedBlockEntity == entity) return;
 		this.currentRenderedBlockEntity = entity;
@@ -88,15 +90,26 @@ public class CapturedRenderingState {
 		if (this.blockEntityIdListener != null) {
 			this.blockEntityIdListener.run();
 		}
+		notifyEntityIdsChanged();
 	}
 
-    private void setCurrentEntity(int entity) {
-		if (currentRenderedEntity == entity) return;
-		this.currentRenderedEntity = entity;
-
-		if (this.entityIdListener != null) {
-			this.entityIdListener.run();
+	/** Updates entity and item IDs together before notifying material ID listeners. */
+	private void applyCurrentEntityAndItem(int entity, int item) {
+		final boolean entityChanged = currentRenderedEntity != entity;
+		final boolean itemChanged = currentRenderedItem != item;
+		if (entityChanged) {
+			this.currentRenderedEntity = entity;
+			if (this.entityIdListener != null) {
+				this.entityIdListener.run();
+			}
 		}
+		if (itemChanged) {
+			this.currentRenderedItem = item;
+			if (this.itemIdListener != null) {
+				this.itemIdListener.run();
+			}
+		}
+		if (entityChanged || itemChanged) notifyEntityIdsChanged();
 	}
 
 	/**
@@ -104,15 +117,14 @@ public class CapturedRenderingState {
 	 */
 	public void setCurrentEntityAndItem(int entity, int item) {
 		IrisDisplayListState.recordEntityAndItem(entity, item);
-		setCurrentEntity(entity);
-		applyCurrentRenderedItem(item);
+		applyCurrentEntityAndItem(entity, item);
 	}
 
+	/** Resolves a named entity ID and clears the current item ID. */
 	public void setCurrentNamedEntity(NamespacedId entity) {
 		IrisDisplayListState.recordNamedEntity(entity);
 		final var ids = BlockRenderingSettings.INSTANCE.getEntityIds();
-		setCurrentEntity(ids == null ? -1 : ids.applyAsInt(entity));
-		applyCurrentRenderedItem(0);
+		applyCurrentEntityAndItem(ids == null ? -1 : ids.applyAsInt(entity), 0);
 	}
 
 	public void pushCurrentEntityAndItem() {
@@ -121,17 +133,17 @@ public class CapturedRenderingState {
 		itemStack.push(currentRenderedItem);
 	}
 
+	/** Records the rendered entity and updates its entity and item IDs. */
 	public void setCurrentRenderedEntity(Entity entity) {
 		IrisDisplayListState.recordEntity(entity);
-		setCurrentEntity(EntityIdHelper.getEntityId(entity));
-		applyCurrentRenderedItem(0);
+		applyCurrentEntityAndItem(EntityIdHelper.getEntityId(entity), 0);
 	}
 
+	/** Restores the caller entity and item IDs from their scope stacks. */
 	public void popCurrentEntityAndItem() {
 		IrisDisplayListState.recordEntityScope(false);
 		// Restore the playback caller, never the IDs seen while compiling the list.
-		setCurrentEntity(entityStack.popInt());
-		applyCurrentRenderedItem(itemStack.popInt());
+		applyCurrentEntityAndItem(entityStack.popInt(), itemStack.popInt());
 	}
 
     public void setCurrentEntityColor(float r, float g, float b, float a) {
@@ -199,6 +211,7 @@ public class CapturedRenderingState {
 		applyCurrentRenderedItem(itemStack.popInt());
 	}
 
+	/** Updates the rendered item ID and notifies dependent listeners. */
 	private void applyCurrentRenderedItem(int item) {
 		if (this.currentRenderedItem == item) {
 			return;
@@ -208,6 +221,20 @@ public class CapturedRenderingState {
 
 		if (this.itemIdListener != null) {
 			this.itemIdListener.run();
+		}
+		notifyEntityIdsChanged();
+	}
+
+	/** Registers and immediately synchronizes the combined material ID listener. */
+	public void setEntityIdsListener(Runnable listener) {
+		this.entityIdsListener = listener;
+		notifyEntityIdsChanged();
+	}
+
+	/** Notifies the combined material ID listener when installed. */
+	private void notifyEntityIdsChanged() {
+		if (this.entityIdsListener != null) {
+			this.entityIdsListener.run();
 		}
 	}
 

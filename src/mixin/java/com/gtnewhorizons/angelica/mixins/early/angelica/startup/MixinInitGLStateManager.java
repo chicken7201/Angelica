@@ -8,6 +8,7 @@ import com.gtnewhorizons.angelica.config.SystemProperties;
 import com.gtnewhorizons.angelica.compat.DriverCompatabilityCheck;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.backend.BackendManager;
+import com.gtnewhorizons.angelica.glsm.backend.BackendStartGuard;
 import com.gtnewhorizons.angelica.glsm.hooks.GLSMConfig;
 import com.gtnewhorizons.angelica.glsm.hooks.GLSMHooks;
 import com.gtnewhorizons.angelica.glsm.hooks.GLSMInitConfig;
@@ -32,6 +33,7 @@ public class MixinInitGLStateManager {
         SDLGPUGate.ensureDrawableInstalled();
     }
 
+    /** Initializes GLSM and disarms the SDL GPU device startup guard. */
     @Inject(method = "initializeTextures", at = @At("RETURN"))
     private static void angelica$initializeGLStateManager(CallbackInfo ci) {
         final Minecraft mc = Minecraft.getMinecraft();
@@ -47,6 +49,7 @@ public class MixinInitGLStateManager {
             .enableDSA(AngelicaConfig.enableDSA)
             .postInitCallback(SelectionBoxRenderer::init)
             .build());
+        BackendStartGuard.disarm();
 
         GLSMConfig.extendedAttribsExpected = AngelicaConfig.enableIris;
 

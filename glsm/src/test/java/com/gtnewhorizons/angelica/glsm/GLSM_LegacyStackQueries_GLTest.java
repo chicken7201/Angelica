@@ -695,22 +695,18 @@ public class GLSM_LegacyStackQueries_GLTest {
         return Math.max(smooth, range.get(1));
     }
 
-    /** Verifies the first core-profile maximum lookup is error-free and remains cached. */
+    /** Verifies the initialized point-size limit matches the driver and repeated queries remain error-free. */
     @Test
     void maximumPointSizeUsesSupportedQueriesAndCachesTheResult() {
         final GLContextState context = GLStateManager.ctx();
-        final float previousMaximum = context.maxPointSize;
         final float previousLimit = context.pointState.getMaxSize();
         try {
-            context.maxPointSize = Float.NaN;
             context.pointState.setMaxSize(Float.NaN);
             final float expected = driverMaxPointSize();
             assertEquals(expected, GLStateManager.glGetFloat(GL14.GL_POINT_SIZE_MAX));
-            assertEquals(expected, context.maxPointSize);
             assertEquals(expected, GLStateManager.glGetFloat(GL14.GL_POINT_SIZE_MAX));
             assertEquals(GL11.GL_NO_ERROR, GL11.glGetError());
         } finally {
-            context.maxPointSize = previousMaximum;
             context.pointState.setMaxSize(previousLimit);
         }
     }

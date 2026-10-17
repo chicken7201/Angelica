@@ -12,6 +12,7 @@ import com.gtnewhorizons.angelica.glsm.backend.BackendManager;
 import com.gtnewhorizons.angelica.glsm.backend.GLDebugMessageListener;
 import com.gtnewhorizons.angelica.glsm.backend.VSyncMode;
 import com.gtnewhorizons.angelica.glsm.ffp.FfpExtendedAttribs;
+import com.gtnewhorizons.angelica.glsm.ffp.InstancedAttribs;
 import com.gtnewhorizons.angelica.glsm.ffp.Instancing;
 import com.gtnewhorizons.angelica.glsm.profiling.Tracy;
 import com.gtnewhorizons.angelica.glsm.ffp.ShaderManager;
@@ -25,6 +26,7 @@ import com.gtnewhorizons.angelica.glsm.hooks.GLSMHooks;
 import com.gtnewhorizons.angelica.glsm.hooks.BatchStateGuard;
 import com.gtnewhorizons.angelica.glsm.hooks.GLSMInitConfig;
 import com.gtnewhorizons.angelica.glsm.hooks.GlintColorHandler;
+import com.gtnewhorizons.angelica.glsm.hooks.ImmediateExtendedAttribHandler;
 import com.gtnewhorizons.angelica.glsm.recording.CommandRecorder;
 import com.gtnewhorizons.angelica.glsm.recording.CompiledDisplayList;
 import com.gtnewhorizons.angelica.glsm.recording.ImmediateModeRecorder;
@@ -68,6 +70,7 @@ import com.gtnewhorizons.angelica.glsm.states.ImageUnitBinding;
 import com.gtnewhorizons.angelica.glsm.states.TextureBinding;
 import com.gtnewhorizons.angelica.glsm.states.TextureUnitArray;
 import com.gtnewhorizons.angelica.glsm.streaming.LineQuads;
+import com.gtnewhorizons.angelica.glsm.streaming.TessellatorEntityIds;
 import com.gtnewhorizons.angelica.glsm.streaming.TessellatorStreamingDrawer;
 import com.gtnewhorizons.angelica.glsm.texture.TextureInfo;
 import com.gtnewhorizons.angelica.glsm.texture.TextureInfoCache;
@@ -93,7 +96,6 @@ import org.lwjgl.opengl.Display;
 import org.lwjgl.opengl.Drawable;
 import org.lwjgl.opengl.EXTTextureFilterAnisotropic;
 import org.lwjgl.opengl.GL11;
-import org.lwjgl.opengl.GL42;
 import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL14;
@@ -104,6 +106,8 @@ import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GL31;
 import org.lwjgl.opengl.GL32;
 import org.lwjgl.opengl.GL33;
+import org.lwjgl.opengl.GL42;
+import org.lwjgl.opengl.GL43;
 import org.lwjgl.opengl.GLContext;
 import org.lwjgl.opengl.KHRDebug;
 import org.lwjgl.opengl.KHRDebugCallback;
@@ -328,6 +332,7 @@ public class GLStateManager {
     public static final int MAX_PROJECTION_STACK_DEPTH = 4;
     public static final int MAX_TEXTURE_STACK_DEPTH = 4;
     public static final int MAX_CLIP_PLANES = 8;
+    public static final int INDEXED_BUFFER_SLOTS = 64;
     public static final int MAX_TEXTURE_UNITS = RENDER_BACKEND.getInteger(GL20.GL_MAX_TEXTURE_IMAGE_UNITS);
     public static final int MAX_LEGACY_TEXTURE_UNITS = Math.min(VertexKey.MAX_UNITS, MAX_TEXTURE_UNITS);
     public static final int MAX_TEXTURE_COORDS = Math.min(VAOManager.TEX_COORD_UNITS, MAX_TEXTURE_UNITS);
@@ -394,6 +399,28 @@ public class GLStateManager {
         }
     }
 
+    /** Tracks current material IDs and records changes within an active tessellator batch. */
+    public static void setEntityIds(int entity, int blockEntity, int item) {
+        if (!isMainThread()) return;
+        final GLContextState glCtx = ctx();
+        final long ids = InstancedAttribs.packEntityInfo(entity, blockEntity, item);
+        if (ids == glCtx.entityIds) return;
+        TessellatorEntityIds.onIdsChanged(glCtx.entityIds, ids);
+        glCtx.entityIds = ids;
+        glCtx.dirtyEntityIdsAttrib = true;
+    }
+
+    /** Uploads pending material IDs to the current shader attribute. */
+    public static void flushEntityIds(GLContextState glCtx) {
+        if (!glCtx.dirtyEntityIdsAttrib || glCtx.activeProgram == 0) return;
+        final ImmediateExtendedAttribHandler handler = GLSMHooks.immediateExtendedHandler;
+        if (handler == null || !handler.wantsEntityIds()) return;
+        final long ids = glCtx.entityIds;
+        RENDER_BACKEND.vertexAttrib4f(ImmediateExtendedAttribHandler.LOC_ENTITY_IDS,
+            InstancedAttribs.normalizedId(ids, 0), InstancedAttribs.normalizedId(ids, 16), InstancedAttribs.normalizedId(ids, 32), 0.0f);
+        glCtx.dirtyEntityIdsAttrib = false;
+    }
+
 
     public static int getMaxBoundTextureUnit() {
         return ctx().maxBoundTextureUnit;
@@ -415,6 +442,7 @@ public class GLStateManager {
 
     // This setting varies depending on driver, so it gets queried at runtime
     public static int DEFAULT_DRAW_BUFFER = GL11.GL_BACK;
+    private static float maxPointSize;
 
     private static volatile Thread CurrentThread = MainThread;
     @Setter @Getter private static boolean runningSplash = true;
@@ -515,21 +543,6 @@ public class GLStateManager {
                 attribSlotsSaved++;
             }
         }
-    }
-
-    /** Caches the driver point-size limit using queries supported by the current GL profile. */
-    private static float maxPointSize(GLContextState glCtx) {
-        if (Float.isNaN(glCtx.maxPointSize)) {
-            final FloatBuffer range = glCtx.queryScratch;
-            range.clear();
-            RENDER_BACKEND.getFloat(GL11.GL_POINT_SIZE_RANGE, range);
-            final float smooth = range.get(1);
-            if (!RenderSystem.isCoreProfile() && !RenderSystem.isGLES()) {
-                RENDER_BACKEND.getFloat(GL12.GL_ALIASED_POINT_SIZE_RANGE, range);
-            }
-            glCtx.maxPointSize = Math.max(smooth, range.get(1));
-        }
-        return glCtx.maxPointSize;
     }
 
     private static <T extends CowStateStack<?>> T mod(T s) {
@@ -696,6 +709,7 @@ public class GLStateManager {
         windows = os.contains("win");
     }
 
+    /** Initializes tracked GL state, default resources, and profile-compatible point-size limits. */
     static void init(Runnable initCallback) {
         final GLContextState glCtx = ctx();
         RenderSystem.initRenderer();
@@ -779,6 +793,16 @@ public class GLStateManager {
         if (initCallback != null) {
             initCallback.run();
         }
+
+        final FloatBuffer range = glCtx.queryScratch;
+        range.clear();
+        RENDER_BACKEND.getFloat(GL11.GL_POINT_SIZE_RANGE, range);
+        final float smooth = range.get(1);
+        // Core and GLES profiles do not expose the legacy aliased point-size query.
+        if (!RenderSystem.isCoreProfile() && !RenderSystem.isGLES()) {
+            RENDER_BACKEND.getFloat(GL12.GL_ALIASED_POINT_SIZE_RANGE, range);
+        }
+        maxPointSize = Math.max(smooth, range.get(1));
 
         // Drain any pending GL errors from initialization. In core profile, some legacy queries may generate GL_INVALID_ENUM. The splash thread inherits the
         // DrawableGL context and its error state, so stale errors here would cause SplashProgress.checkGLError() to fail.
@@ -1475,6 +1499,7 @@ public class GLStateManager {
         return glGetFloat(ctx(), pname);
     }
 
+    /** Answers floating-point queries from tracked state or the render backend. */
     static float glGetFloat(GLContextState glCtx, int pname) {
         return switch (pname) {
             case GL11.GL_ALPHA_TEST_REF -> glCtx.alphaState.getReference();
@@ -1485,7 +1510,7 @@ public class GLStateManager {
             case GL11.GL_LINE_WIDTH -> glCtx.lineState.getWidth();
             case GL11.GL_POINT_SIZE -> glCtx.pointState.getSize();
             case GL14.GL_POINT_SIZE_MIN -> glCtx.pointState.getMinSize();
-            case GL14.GL_POINT_SIZE_MAX -> Float.isNaN(glCtx.pointState.getMaxSize()) ? maxPointSize(glCtx) : glCtx.pointState.getMaxSize();
+            case GL14.GL_POINT_SIZE_MAX -> Float.isNaN(glCtx.pointState.getMaxSize()) ? maxPointSize : glCtx.pointState.getMaxSize();
             case GL14.GL_POINT_FADE_THRESHOLD_SIZE -> glCtx.pointState.getFadeThreshold();
             default -> {
                 final int desc = isCachingEnabled() ? LegacyQueries.desc(pname) : 0;
@@ -4764,6 +4789,7 @@ public class GLStateManager {
         return dch != null && dch.isOverrideHeld();
     }
 
+    /** Restores tracked GL state and marks generic attributes for refresh. */
     public static void replayStateToBackend() {
         final GLContextState glCtx = ctx();
         if (RENDER_BACKEND == null) return;
@@ -4828,6 +4854,7 @@ public class GLStateManager {
         glCtx.dirtyNormalAttrib = true;
         glCtx.dirtyTexCoordAttrib = true;
         glCtx.dirtyLightmapAttrib = true;
+        glCtx.dirtyEntityIdsAttrib = true;
     }
 
     private static void applyPolygonOffset(GLContextState glCtx) {
@@ -7253,6 +7280,7 @@ public class GLStateManager {
         }
     }
 
+    /** Clears cached references to a deleted buffer, including indexed bindings. */
     private static void invalidateDeletedBuffer(int buffer) {
         final GLContextState glCtx = ctx();
         if (buffer == 0) return;
@@ -7269,6 +7297,10 @@ public class GLStateManager {
                 if (e.getIntValue() != buffer) continue;
                 e.setValue(0);
                 RENDER_BACKEND.bindBuffer(e.getIntKey(), 0);
+            }
+            for (int i = 0; i < INDEXED_BUFFER_SLOTS; i++) {
+                if (glCtx.uniformBufferBindings[i] == buffer) glCtx.uniformBufferBindings[i] = 0;
+                if (glCtx.storageBufferBindings[i] == buffer) glCtx.storageBufferBindings[i] = 0;
             }
             writeMappedBuffers.remove(buffer);
 
@@ -7881,24 +7913,53 @@ public class GLStateManager {
     public static void glGetQueryObjectui(int id, int pname, IntBuffer params) { RENDER_BACKEND.getQueryObjectui(id, pname, params); }
     public static int glGetQueryObjecti(int id, int pname) { return RENDER_BACKEND.getQueryObjecti(id, pname); }
 
+    /** Binds a buffer to an indexed target and updates the binding caches. */
     public static void glBindBufferBase(int target, int index, int buffer) {
         final boolean locked = acquireDrawLock();
         try {
-            trackBufferBinding(ctx(), target, buffer);
+            final GLContextState glCtx = ctx();
+            trackBufferBinding(glCtx, target, buffer);
+            trackIndexedBufferBinding(glCtx, target, index, buffer);
             RENDER_BACKEND.bindBufferBase(target, index, buffer);
         } finally {
             if (locked) releaseDrawLock();
         }
     }
 
+    /** Binds a buffer range and tracks its generic and indexed bindings. */
     public static void glBindBufferRange(int target, int index, int buffer, long offset, long size) {
         final boolean locked = acquireDrawLock();
         try {
-            trackBufferBinding(ctx(), target, buffer);
+            final GLContextState glCtx = ctx();
+            trackBufferBinding(glCtx, target, buffer);
+            trackIndexedBufferBinding(glCtx, target, index, buffer);
             RENDER_BACKEND.bindBufferRange(target, index, buffer, offset, size);
         } finally {
             if (locked) releaseDrawLock();
         }
+    }
+
+    /** Returns the tracked indexed binding array for a supported target and slot. */
+    private static int[] indexedBufferBindings(GLContextState glCtx, int target, int index) {
+        if (index < 0 || index >= INDEXED_BUFFER_SLOTS) return null;
+        if (target == GL31.GL_UNIFORM_BUFFER) return glCtx.uniformBufferBindings;
+        if (target == GL43.GL_SHADER_STORAGE_BUFFER) return glCtx.storageBufferBindings;
+        return null;
+    }
+
+    /** Updates a supported indexed buffer binding in the current context. */
+    private static void trackIndexedBufferBinding(GLContextState glCtx, int target, int index, int buffer) {
+        final int[] bindings = indexedBufferBindings(glCtx, target, index);
+        if (bindings != null) bindings[index] = buffer;
+    }
+
+    /** Returns an indexed buffer binding from tracked state or the backend. */
+    public static int getIndexedBufferBinding(int target, int index) {
+        if (isCachingEnabled()) {
+            final int[] bindings = indexedBufferBindings(ctx(), target, index);
+            if (bindings != null) return bindings[index];
+        }
+        return RENDER_BACKEND.getIndexedBufferBinding(target, index);
     }
 
     public static int glGetUniformBlockIndex(int program, CharSequence name) { return RENDER_BACKEND.getUniformBlockIndex(program, name); }
@@ -8659,7 +8720,10 @@ public class GLStateManager {
         return ctx().imageUnits.get(unit);
     }
 
-    private static int imageBindingOrBackend(int pname, int index) {
+    /** Answers indexed buffer and image queries from caches when available. */
+    private static int indexedIntegerOrBackend(int pname, int index) {
+        if (pname == GL31.GL_UNIFORM_BUFFER_BINDING) return getIndexedBufferBinding(GL31.GL_UNIFORM_BUFFER, index);
+        if (pname == GL43.GL_SHADER_STORAGE_BUFFER_BINDING) return getIndexedBufferBinding(GL43.GL_SHADER_STORAGE_BUFFER, index);
         final ImageUnitBinding binding = !isCachingEnabled() ? null : ctx().imageUnits.get(index);
         if (binding == null) return RENDER_BACKEND.getIntegerIndexed(pname, index);
         return switch (pname) {
@@ -8673,24 +8737,28 @@ public class GLStateManager {
         };
     }
 
+    /** Returns the integer value for an indexed GL query. */
     public static int glGetInteger(int pname, int index) {
-        return imageBindingOrBackend(pname, index);
+        return indexedIntegerOrBackend(pname, index);
     }
 
+    /** Returns the integer value for an indexed GL query. */
     public static int glGetIntegeri(int pname, int index) {
-        return imageBindingOrBackend(pname, index);
+        return indexedIntegerOrBackend(pname, index);
     }
 
     public static void glGetIntegeri(int pname, int index, IntBuffer params) {
         glGetIntegeri_v(pname, index, params);
     }
 
+    /** Writes an indexed integer query result without advancing the buffer position. */
     public static void glGetIntegeri_v(int pname, int index, IntBuffer params) {
-        params.put(params.position(), imageBindingOrBackend(pname, index));
+        params.put(params.position(), indexedIntegerOrBackend(pname, index));
     }
 
+    /** Writes an indexed query result as a GL boolean. */
     public static void glGetBooleani_v(int pname, int index, ByteBuffer params) {
-        params.put(params.position(), (byte) (imageBindingOrBackend(pname, index) != 0 ? GL11.GL_TRUE : GL11.GL_FALSE));
+        params.put(params.position(), (byte) (indexedIntegerOrBackend(pname, index) != 0 ? GL11.GL_TRUE : GL11.GL_FALSE));
     }
 
     public static void glGetBooleani(int pname, int index, ByteBuffer params) {
