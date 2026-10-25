@@ -1436,12 +1436,29 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 			IrisDisplayListState.runProgramTransition(Pass::useNow, this);
 		}
 
+		/** Updates rebind program state for DeferredWorldRenderingPipeline. */
 		void rebindProgram() {
 			if (program != null) program.use();
-			DeferredWorldRenderingPipeline.this.customUniforms.push(this);
+			final boolean suspended = GLStateManager.suspendExitCapture();
+			try {
+				DeferredWorldRenderingPipeline.this.customUniforms.push(this);
+			} finally {
+				GLStateManager.resumeExitCapture(suspended);
+			}
 		}
 
+		/** Updates use now state for DeferredWorldRenderingPipeline. */
 		private void useNow() {
+			final boolean suspended = GLStateManager.suspendExitCapture();
+			try {
+				applyState();
+			} finally {
+				GLStateManager.resumeExitCapture(suspended);
+			}
+		}
+
+		/** Applies state for DeferredWorldRenderingPipeline. */
+		private void applyState() {
 			DepthColorStorage.unlockDepthColor();
 
 			if (isBeforeTranslucent) {
@@ -1485,15 +1502,21 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 			}
 		}
 
+		/** Stops using for DeferredWorldRenderingPipeline. */
 		public void stopUsing() {
-			DepthColorStorage.unlockDepthColor();
+			final boolean suspended = GLStateManager.suspendExitCapture();
+			try {
+				DepthColorStorage.unlockDepthColor();
 
-			if (alphaTestOverride != null) {
-				AlphaTestOverride.restore();
-			}
+				if (alphaTestOverride != null) {
+					AlphaTestOverride.restore();
+				}
 
-			if (blendModeOverride != null || (bufferBlendOverrides != null && !bufferBlendOverrides.isEmpty())) {
-				BlendModeOverride.restore();
+				if (blendModeOverride != null || (bufferBlendOverrides != null && !bufferBlendOverrides.isEmpty())) {
+					BlendModeOverride.restore();
+				}
+			} finally {
+				GLStateManager.resumeExitCapture(suspended);
 			}
 		}
 
@@ -1605,6 +1628,12 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 	@Override
 	public boolean hasInstancedVariant(Instancing kind) {
 		return current != null && current.instancedVariant(kind) != null;
+	}
+
+	/** Checks whether has instanced variant. */
+	public boolean hasInstancedVariant(RenderCondition condition, InputAvailability availability, Instancing kind) {
+		final Pass pass = table.match(condition, availability);
+		return pass != null && pass.instancedVariant(kind) != null;
 	}
 
 	@Override
@@ -2496,25 +2525,36 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 		return currentSpecularTexture;
 	}
 
+	/** Updates on bind texture state for DeferredWorldRenderingPipeline. */
 	@Override
 	public void onBindTexture(int id) {
 		if (shouldBindPBR && isRenderingWorld) {
-			final PBRTextureHolder pbrHolder = PBRTextureManager.INSTANCE.getOrLoadHolder(id);
-			currentNormalTexture = pbrHolder.getNormalTexture().getGlTextureId();
-			currentSpecularTexture = pbrHolder.getSpecularTexture().getGlTextureId();
-
-			BatchStateGuard.suspend();
+			final boolean suspended = GLStateManager.suspendExitCapture();
 			try {
-				final TextureFormat textureFormat = TextureFormatLoader.getFormat();
-				if (textureFormat != null) {
-					textureFormat.setupTextureParameters(PBRType.NORMAL, pbrHolder.getNormalTexture());
-					textureFormat.setupTextureParameters(PBRType.SPECULAR, pbrHolder.getSpecularTexture());
-				}
-
-				PBRTextureManager.notifyPBRTexturesChanged();
+				updatePbrTextures(id);
 			} finally {
-				BatchStateGuard.resume();
+				GLStateManager.resumeExitCapture(suspended);
 			}
+		}
+	}
+
+	/** Updates pbr textures for DeferredWorldRenderingPipeline. */
+	private void updatePbrTextures(int id) {
+		final PBRTextureHolder pbrHolder = PBRTextureManager.INSTANCE.getOrLoadHolder(id);
+		currentNormalTexture = pbrHolder.getNormalTexture().getGlTextureId();
+		currentSpecularTexture = pbrHolder.getSpecularTexture().getGlTextureId();
+
+		BatchStateGuard.suspend();
+		try {
+			final TextureFormat textureFormat = TextureFormatLoader.getFormat();
+			if (textureFormat != null) {
+				textureFormat.setupTextureParameters(PBRType.NORMAL, pbrHolder.getNormalTexture());
+				textureFormat.setupTextureParameters(PBRType.SPECULAR, pbrHolder.getSpecularTexture());
+			}
+
+			PBRTextureManager.notifyPBRTexturesChanged();
+		} finally {
+			BatchStateGuard.resume();
 		}
 	}
 
@@ -2613,7 +2653,7 @@ public class DeferredWorldRenderingPipeline implements WorldRenderingPipeline, R
 
 	private static final ProgramId[] INSTANCED_PROGRAM_IDS = {
 		ProgramId.Block, ProgramId.BlockTrans, ProgramId.Entities, ProgramId.EntitiesTrans,
-		ProgramId.Shadow, ProgramId.ShadowWater, ProgramId.ArmorGlint
+		ProgramId.Shadow, ProgramId.ShadowWater, ProgramId.ArmorGlint, ProgramId.SpiderEyes
 	};
 
 	private static final ProgramId[] PARTICLE_PROGRAM_IDS = {

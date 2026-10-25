@@ -75,8 +75,14 @@ import com.gtnewhorizons.angelica.glsm.streaming.TessellatorStreamingDrawer;
 import com.gtnewhorizons.angelica.glsm.texture.TextureInfo;
 import com.gtnewhorizons.angelica.glsm.texture.TextureInfoCache;
 import com.gtnewhorizons.angelica.glsm.texture.TextureStaging;
+import com.gtnewhorizons.angelica.glsm.texture.TextureTargets;
 import it.unimi.dsi.fastutil.ints.Int2IntMap;
+import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
+import it.unimi.dsi.fastutil.ints.Int2LongMap;
+import it.unimi.dsi.fastutil.ints.Int2LongMaps;
+import it.unimi.dsi.fastutil.ints.Int2LongOpenHashMap;
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
+import it.unimi.dsi.fastutil.longs.LongIterator;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.SneakyThrows;
@@ -106,6 +112,7 @@ import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GL31;
 import org.lwjgl.opengl.GL32;
 import org.lwjgl.opengl.GL33;
+import org.lwjgl.opengl.GL40;
 import org.lwjgl.opengl.GL42;
 import org.lwjgl.opengl.GL43;
 import org.lwjgl.opengl.GLContext;
@@ -126,8 +133,6 @@ import java.nio.LongBuffer;
 import java.nio.ShortBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
-import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Set;
@@ -155,8 +160,92 @@ import static com.gtnewhorizons.angelica.glsm.backend.BackendManager.RENDER_BACK
 @SuppressWarnings("unused") // Used in ASM
 public class GLStateManager {
 
-    /** Called before a mutation, while deferred draws can still use their original state. */
+    /** Begins recording render-state changes for a later entity replay. */
+    public static void beginExitCapture(ExitState result) { ctx().exitCapture.begin(result); }
+    /** Finishes recording and returns the captured render-state changes. */
+    public static boolean finishExitCapture(ExitState result) { return ctx().exitCapture.finish(result); }
+    /** Checks whether captured exit state can be applied to the current context. */
+    public static boolean canApplyExitState(ExitState result) { return ctx().exitCapture.canApply(result); }
+    /** Applies captured render-state changes to the live context. */
+    public static void applyExitState(ExitState result) { ctx().exitCapture.apply(result); }
+    /** Discards the active render-state capture. */
+    public static void cancelExitCapture() { ctx().exitCapture.cancel(); }
+    /** Temporarily suspends recording of render-state changes. */
+    public static boolean suspendExitCapture() {
+        if (!ExitStateCapture.anyOpen()) return false;
+        ctx().exitCapture.suspend();
+        return true;
+    }
+    /** Resumes recording after a suspended render-state operation. */
+    public static void resumeExitCapture(boolean suspended) { if (suspended) ctx().exitCapture.resume(); }
+    /** Reports whether exit capture active applies to GLStateManager. */
+    public static boolean isExitCaptureActive() { return ExitStateCapture.anyOpen() && ctx().exitCapture.active(); }
+    /** Validates the draw state required for replaying captured geometry. */
+    public static void requireExitDrawState(boolean materialFromState) {
+        if (ExitStateCapture.anyOpen()) ctx().exitCapture.requireDrawState(materialFromState);
+    }
+    /** Validates inherited vertex defaults before retaining an entity draw. */
+    public static void requireExitVertexDefaults(boolean normal, boolean texCoord, boolean color, boolean lightmap) {
+        if (ExitStateCapture.anyOpen()) ctx().exitCapture.requireVertexDefaults(normal, texCoord, color, lightmap);
+    }
+    /** Begins exit texture filter for GLStateManager. */
+    public static boolean beginExitTextureFilter(boolean nearest) { return ExitStateCapture.anyOpen() && ctx().exitCapture.beginTextureFilter(nearest); }
+    /** Finishes exit texture filter save for GLStateManager. */
+    public static void finishExitTextureFilterSave() { ctx().exitCapture.finishTextureFilterSave(); }
+    /** Begins exit texture filter restore for GLStateManager. */
+    public static boolean beginExitTextureFilterRestore() { return ExitStateCapture.anyOpen() && ctx().exitCapture.beginTextureFilterRestore(); }
+    /** Finishes exit texture filter restore for GLStateManager. */
+    public static void finishExitTextureFilterRestore() { ctx().exitCapture.finishTextureFilterRestore(); }
+    /** Updates fail exit texture filter state for GLStateManager. */
+    public static void failExitTextureFilter() { ctx().exitCapture.failTextureFilter(); }
+    /** Validates exit texture filter for GLStateManager. */
+    public static void requireExitTextureFilter(int texture, boolean nearest) {
+        if (ExitStateCapture.anyOpen()) ctx().exitCapture.requireTextureFilter(texture, nearest);
+    }
+    /** Returns exit polygon offset writes for GLStateManager. */
+    public static int getExitPolygonOffsetWrites() { return ExitStateCapture.anyOpen() ? ctx().exitCapture.polygonOffsetWrites() : 0; }
+    /** Reports whether exit lighting written applies to GLStateManager. */
+    public static boolean isExitLightingWritten() { return ExitStateCapture.anyOpen() && ctx().exitCapture.lightingWritten(); }
+
+    /** Records an enabled or disabled capability in the current capture. */
+    public static void recordExitCapability(GLContextState context, int cap, int unit) {
+        if (context != null) context.exitCapture.capability(cap, unit);
+    }
+
+    /** Records the current normal in the active exit-state capture. */
+    public static void recordExitNormal() {
+        if (ExitStateCapture.anyOpen()) ctx().exitCapture.write(ExitStateCapture.NORMAL);
+    }
+
+    /** Records texture coordinates in the active exit-state capture. */
+    public static void recordExitTexCoord(int unit) {
+        if (!ExitStateCapture.anyOpen()) return;
+        if (unit == 0) ctx().exitCapture.write(ExitStateCapture.TEXCOORD);
+        else ctx().exitCapture.reject();
+    }
+
+    /** Rejects the current capture when an unsupported GL operation occurs. */
+    static void rejectExitCapture() {
+        if (ExitStateCapture.anyOpen()) ctx().exitCapture.reject();
+    }
+
+    /** Records texture binding changes for later state replay. */
+    static void recordExitTextureBind(int target, int unit) {
+        if (ExitStateCapture.anyOpen()) recordExitTextureBind(ctx(), target, unit);
+    }
+
+    /** Records texture binding changes for later state replay. */
+    private static void recordExitTextureBind(GLContextState glCtx, int target, int unit) {
+        if (target == GL11.GL_TEXTURE_2D && unit == 0) glCtx.exitCapture.write(ExitStateCapture.TEXTURE_BINDING);
+        else glCtx.exitCapture.reject();
+    }
+
+    /**
+     * Called before a mutation, while deferred draws can still use their original state. State the batcher does not
+     * capture is state an exit capture cannot apply either, so this also rejects any open exit capture.
+     */
     public static void beforeUncapturedStateChange() {
+        rejectExitCapture();
         if (BatchStateGuard.isSuspended()) return;
         if (DisplayListManager.getRecordMode() == RecordMode.COMPILE) return;
         BatchStateGuard.beforeChange();
@@ -177,11 +266,21 @@ public class GLStateManager {
         beforeUncapturedStateChange();
     }
 
+    /** Updates before matrix change state for GLStateManager. */
     private static void beforeMatrixChange(GLContextState c) {
-        if (c.matrixMode.getMode() == GL11.GL_PROJECTION
-            || (c.matrixMode.getMode() == GL11.GL_TEXTURE && c.activeTextureUnit.getValue() != 0)) {
-            beforeUncapturedStateChange();
-        }
+        beforeMatrixChange(c, false);
+    }
+
+    /** Updates before matrix change state for GLStateManager. */
+    private static void beforeMatrixChange(GLContextState c, boolean absolute) {
+        c.exitCapture.matrixChange(absolute);
+        if (isUncapturedMatrix(c)) beforeUncapturedStateChange();
+    }
+
+    /** Reports whether uncaptured matrix applies to GLStateManager. */
+    private static boolean isUncapturedMatrix(GLContextState c) {
+        final int mode = c.matrixMode.getMode();
+        return mode == GL11.GL_PROJECTION || (mode == GL11.GL_TEXTURE && c.activeTextureUnit.getValue() != 0);
     }
 
     public static final Logger LOGGER = LogManager.getLogger("GLSM");
@@ -315,7 +414,9 @@ public class GLStateManager {
         return Thread.currentThread() == MainThread;
     }
 
+    /** Validates context for GLStateManager. */
     public static void requireContext(String call) {
+        rejectExitCapture();
         if (Thread.currentThread() == MainThread || RENDER_BACKEND.hasContextOnThread()) return;
         throw new IllegalStateException(call + " on thread " + Thread.currentThread().getName() + ", which has no GL context");
     }
@@ -343,13 +444,16 @@ public class GLStateManager {
     // Per-matrix-mode generation counters - avoids re-uploading all matrices when only one mode changed
     public static void setOverlayColor(float r, float g, float b, float a) {
         final GLContextState glCtx = ctx();
+        glCtx.exitCapture.write(ExitStateCapture.OVERLAY_COLOR);
         if (r == glCtx.overlayR && g == glCtx.overlayG && b == glCtx.overlayB && a == glCtx.overlayA) return;
         glCtx.overlayR = r; glCtx.overlayG = g; glCtx.overlayB = b; glCtx.overlayA = a;
         glCtx.fragmentGeneration++;
     }
 
+    /** Updates shader color for GLStateManager. */
     public static void setShaderColor(float r, float g, float b, float a) {
         final GLContextState glCtx = ctx();
+        glCtx.exitCapture.write(ExitStateCapture.SHADER_COLOR);
         if (r == glCtx.shaderColorR && g == glCtx.shaderColorG && b == glCtx.shaderColorB && a == glCtx.shaderColorA) return;
         glCtx.shaderColorR = r; glCtx.shaderColorG = g; glCtx.shaderColorB = b; glCtx.shaderColorA = a;
         if (GLSMHooks.SHADER_COLOR_CHANGE.hasListeners()) {
@@ -401,6 +505,7 @@ public class GLStateManager {
 
     /** Tracks current material IDs and records changes within an active tessellator batch. */
     public static void setEntityIds(int entity, int blockEntity, int item) {
+        rejectExitCapture();
         if (!isMainThread()) return;
         final GLContextState glCtx = ctx();
         final long ids = InstancedAttribs.packEntityInfo(entity, blockEntity, item);
@@ -432,8 +537,24 @@ public class GLStateManager {
     }
     // Deferred texture deletion: names kept valid until glGenTextures recycles them.
     // Emulates Mesa/compat-profile behavior where delete-then-bind doesn't error.
-    private static final IntOpenHashSet deferredDeleteTextures = new IntOpenHashSet();
-    private static final IntOpenHashSet unshrinkableTextures = new IntOpenHashSet();
+    private static final Int2LongOpenHashMap deferredDeleteTextures = new Int2LongOpenHashMap();
+    private static final long DEFERRED_ABSENT = Long.MIN_VALUE;
+    private static final long DEFERRED_ATTACHED = -1;
+    private static final long DEFERRED_RELEASED = -2;
+    private static final int RELEASE_DELAY_FRAMES = 3;
+    private static long frameIndex;
+    private static long nextReleaseFrame = Long.MAX_VALUE;
+    private static final Int2IntOpenHashMap non2DTextureTargets = new Int2IntOpenHashMap();
+    private static final Int2IntOpenHashMap textureFramebufferRefs = new Int2IntOpenHashMap();
+    private static final FloatBuffer TRANSPARENT_BLACK = BufferUtils.createFloatBuffer(4);
+    private static final Tracy.ZoneId Z_TEX_DELETE = Tracy.zoneId("texDelete", Tracy.COLOR_FFP);
+    private static final Tracy.ZoneId Z_TEX_RELEASE_STORAGE = Tracy.zoneId("texReleaseStorage", Tracy.COLOR_FFP);
+    private static final Tracy.ZoneId Z_TEX_RESCUE_RESET = Tracy.zoneId("texRescueReset", Tracy.COLOR_FFP);
+    private static final Tracy.ZoneId Z_TEX_FLUSH_DELETES = Tracy.zoneId("texFlushDeletes", Tracy.COLOR_FFP);
+    static {
+        deferredDeleteTextures.defaultReturnValue(DEFERRED_ABSENT);
+        non2DTextureTargets.defaultReturnValue(GL11.GL_TEXTURE_2D);
+    }
     private static final IntOpenHashSet writeMappedBuffers = new IntOpenHashSet();
 
     @Getter private static Vendor VENDOR;
@@ -579,8 +700,10 @@ public class GLStateManager {
         return ctx().vaos.boundEBO;
     }
 
+    /** Resets GLStateManager state for GLStateManager. */
     public static void reset() {
         final GLContextState glCtx = ctx();
+        glCtx.exitCapture.cancel();
         DisplayListManager.abortCompilation();
         glCtx.attribDepth = 0;
         glCtx.retainedOwner = null;
@@ -896,11 +1019,13 @@ public class GLStateManager {
             case GL11.GL_TEXTURE_GEN_R -> glCtx.textures.getTexGenRStates(glCtx.activeTextureUnit.getValue()).enable();
             case GL11.GL_TEXTURE_GEN_Q -> glCtx.textures.getTexGenQStates(glCtx.activeTextureUnit.getValue()).enable();
             default -> {
+                glCtx.exitCapture.reject();
                 if (!setClientArrayCap(glCtx, cap, true)) RENDER_BACKEND.enable(cap);
             }
         }
     }
 
+    /** Handles glDisable through tracked GL state and the active render backend. */
     public static void glDisable(int cap) {
         final GLContextState glCtx = ctx();
         final RecordMode mode = DisplayListManager.getRecordMode();
@@ -984,12 +1109,15 @@ public class GLStateManager {
             case GL11.GL_TEXTURE_GEN_R -> glCtx.textures.getTexGenRStates(glCtx.activeTextureUnit.getValue()).disable();
             case GL11.GL_TEXTURE_GEN_Q -> glCtx.textures.getTexGenQStates(glCtx.activeTextureUnit.getValue()).disable();
             default -> {
+                glCtx.exitCapture.reject();
                 if (!setClientArrayCap(glCtx, cap, false)) RENDER_BACKEND.disable(cap);
             }
         }
     }
 
+    /** Handles glIsEnabled through tracked GL state and the active render backend. */
     public static boolean glIsEnabled(int cap) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         if (!isCachingEnabled()) {
             return RENDER_BACKEND.getBoolean(cap);
@@ -1072,7 +1200,9 @@ public class GLStateManager {
         };
     }
 
+    /** Handles glGetBoolean through tracked GL state and the active render backend. */
     public static boolean glGetBoolean(int pname) {
+        rejectExitCapture();
         return glGetBoolean(ctx(), pname);
     }
 
@@ -1164,7 +1294,9 @@ public class GLStateManager {
         };
     }
 
+    /** Handles glGetBoolean through tracked GL state and the active render backend. */
     public static void glGetBoolean(int pname, ByteBuffer params) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         if (!isCachingEnabled()) {
             RENDER_BACKEND.getBoolean(pname, params);
@@ -1195,7 +1327,9 @@ public class GLStateManager {
         return (int) MAT4_STACK_CURR_DEPTH.invokeExact(stack) + 1;
     }
 
+    /** Handles glGetInteger through tracked GL state and the active render backend. */
     public static int glGetInteger(int pname) {
+        rejectExitCapture();
         return glGetInteger(ctx(), pname);
     }
 
@@ -1307,7 +1441,9 @@ public class GLStateManager {
         return RENDER_BACKEND.getFramebufferAttachmentParameteri(GL30.GL_DRAW_FRAMEBUFFER, attachment, sizePname);
     }
 
+    /** Handles glGetInteger through tracked GL state and the active render backend. */
     public static void glGetInteger(int pname, IntBuffer params) {
+        rejectExitCapture();
         if (!isCachingEnabled()) {
             RENDER_BACKEND.getInteger(pname, params);
             return;
@@ -1333,7 +1469,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glGetMaterial through tracked GL state and the active render backend. */
     public static void glGetMaterial(int face, int pname, FloatBuffer params) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final MaterialStateStack state;
         if (face == GL11.GL_FRONT) {
@@ -1398,7 +1536,9 @@ public class GLStateManager {
         putLightingInts(scratch, pname, false, params);
     }
 
+    /** Handles glGetLight through tracked GL state and the active render backend. */
     public static void glGetLight(int light, int pname, FloatBuffer params) {
+        rejectExitCapture();
         final LightStateStack state = ctx().lightDataStates[light - GL11.GL_LIGHT0];
         switch (pname) {
             case GL11.GL_AMBIENT -> state.ambient.get(params.position(), params);
@@ -1416,7 +1556,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glGetFloat through tracked GL state and the active render backend. */
     public static void glGetFloat(int pname, FloatBuffer params) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         if (!isCachingEnabled()) {
             RENDER_BACKEND.getFloat(pname, params);
@@ -1495,7 +1637,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glGetFloat through tracked GL state and the active render backend. */
     public static float glGetFloat(int pname) {
+        rejectExitCapture();
         return glGetFloat(ctx(), pname);
     }
 
@@ -1534,14 +1678,18 @@ public class GLStateManager {
         buf.get(params);
     }
 
+    /** Handles glGetDouble through tracked GL state and the active render backend. */
     public static double glGetDouble(int pname) {
+        rejectExitCapture();
         return switch (pname) {
             case GL11.GL_DEPTH_CLEAR_VALUE -> ctx().depthState.getClearValue();
             default -> glGetFloat(pname);
         };
     }
 
+    /** Handles glGetDouble through tracked GL state and the active render backend. */
     public static void glGetDouble(int pname, DoubleBuffer params) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         if (!isCachingEnabled()) {
             RENDER_BACKEND.getDouble(pname, params);
@@ -1594,7 +1742,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glGetClipPlane through tracked GL state and the active render backend. */
     public static void glGetClipPlane(int plane, DoubleBuffer equation) {
+        rejectExitCapture();
         final int index = plane - GL11.GL_CLIP_PLANE0;
         if (index < 0 || index >= MAX_CLIP_PLANES) return;
         ctx().clipPlaneState.getEyePlane(index, equation);
@@ -1603,6 +1753,7 @@ public class GLStateManager {
     // GLStateManager Functions
 
     public static void glBlendColor(float red, float green, float blue, float alpha) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
@@ -1624,12 +1775,16 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glEnablei through tracked GL state and the active render backend. */
     public static void glEnablei(int cap, int index) {
+        rejectExitCapture();
         RENDER_BACKEND.enablei(cap, index);
         markIndexedCapUnknown(cap);
     }
 
+    /** Handles glDisablei through tracked GL state and the active render backend. */
     public static void glDisablei(int cap, int index) {
+        rejectExitCapture();
         RENDER_BACKEND.disablei(cap, index);
         markIndexedCapUnknown(cap);
     }
@@ -1642,7 +1797,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glBlendFuncSeparatei through tracked GL state and the active render backend. */
     public static void glBlendFuncSeparatei(int buf, int srcRGB, int dstRGB, int srcAlpha, int dstAlpha) {
+        rejectExitCapture();
         RENDER_BACKEND.blendFuncSeparatei(buf, srcRGB, dstRGB, srcAlpha, dstAlpha);
         ctx().blendState.setFuncUnknownState();
     }
@@ -1658,11 +1815,13 @@ public class GLStateManager {
         enableBlend(ctx());
     }
 
+    /** Updates enable blend state for GLStateManager. */
     private static void enableBlend(GLContextState glCtx) {
         final BooleanStateStack blend = glCtx.blendMode;
         final boolean wasEnabled = blend.isEffectivelyEnabled();
         final DeferredBlendHandler bh = GLSMHooks.blendHandler;
         if (bh != null && bh.isBlendLocked()) {
+            glCtx.exitCapture.capability(GL11.GL_BLEND, -1);
             blend.beforeModify();
             bh.deferBlendModeToggle(true);
         } else {
@@ -1682,11 +1841,13 @@ public class GLStateManager {
         disableBlend(ctx());
     }
 
+    /** Updates disable blend state for GLStateManager. */
     private static void disableBlend(GLContextState glCtx) {
         final BooleanStateStack blend = glCtx.blendMode;
         final boolean wasEnabled = blend.isEffectivelyEnabled();
         final DeferredBlendHandler bh = GLSMHooks.blendHandler;
         if (bh != null && bh.isBlendLocked()) {
+            glCtx.exitCapture.capability(GL11.GL_BLEND, -1);
             blend.beforeModify();
             bh.deferBlendModeToggle(false);
         } else {
@@ -1817,7 +1978,9 @@ public class GLStateManager {
         blend.clearFuncUnknownState();
     }
 
+    /** Handles glBlendEquation through tracked GL state and the active render backend. */
     public static void glBlendEquation(int mode) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         if (DisplayListManager.isRecording()) {
             throw DisplayListManager.unsupportedInList("glBlendEquation");
@@ -1833,7 +1996,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glBlendEquationSeparate through tracked GL state and the active render backend. */
     public static void glBlendEquationSeparate(int modeRGB, int modeAlpha) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         if (DisplayListManager.isRecording()) {
             throw DisplayListManager.unsupportedInList("glBlendEquationSeparate");
@@ -1849,8 +2014,10 @@ public class GLStateManager {
         }
     }
 
+    /** Updates try blend func separate state for GLStateManager. */
     public static void tryBlendFuncSeparate(int srcRgb, int dstRgb, int srcAlpha, int dstAlpha) {
         final GLContextState glCtx = ctx();
+        glCtx.exitCapture.writeBlend();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
             DisplayListManager.recordBlendFunc(srcRgb, dstRgb, srcAlpha, dstAlpha);
@@ -1945,8 +2112,10 @@ public class GLStateManager {
         glCtx.dirtyNormalAttrib = true;
     }
 
+    /** Handles glDepthFunc through tracked GL state and the active render backend. */
     public static void glDepthFunc(int func) {
         final GLContextState glCtx = ctx();
+        glCtx.exitCapture.write(ExitStateCapture.DEPTH_FUNC);
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
             DisplayListManager.recordDepthFunc(func);
@@ -1962,8 +2131,10 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glDepthMask through tracked GL state and the active render backend. */
     public static void glDepthMask(boolean mask) {
         final GLContextState glCtx = ctx();
+        glCtx.exitCapture.writeDepthColor(ExitStateCapture.DEPTH_MASK);
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
             DisplayListManager.recordDepthMask(mask);
@@ -2092,8 +2263,10 @@ public class GLStateManager {
 
     public static float i2f(int i) {return ((i - Integer.MIN_VALUE) & 0xFFFFFFFFL) / 4294967295.0F;}
 
+    /** Returns the change color result for GLStateManager. */
     private static boolean changeColor(float red, float green, float blue, float alpha) {
         final GLContextState glCtx = ctx();
+        glCtx.exitCapture.write(ExitStateCapture.COLOR);
         // Helper function for glColor*
         final boolean caching = isCachingEnabled();
         if (!caching || red != glCtx.color.getRed() || green != glCtx.color.getGreen() || blue != glCtx.color.getBlue() || alpha != glCtx.color.getAlpha()) {
@@ -2117,7 +2290,9 @@ public class GLStateManager {
         return false;
     }
 
+    /** Handles glSecondaryColor3f through tracked GL state and the active render backend. */
     public static void glSecondaryColor3f(float red, float green, float blue) {
+        rejectExitCapture();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
             DisplayListManager.recordSecondaryColor(red, green, blue);
@@ -2155,13 +2330,17 @@ public class GLStateManager {
 
     private static final Color4 DirtyColor = new Color4(-1.0F, -1.0F, -1.0F, -1.0F);
 
+    /** Clears current color for GLStateManager. */
     public static void clearCurrentColor() {
+        rejectExitCapture();
         // Marks the cache dirty, doesn't actually reset the color
         mod(ctx().color).set(DirtyColor);
     }
 
+    /** Handles glColorMask through tracked GL state and the active render backend. */
     public static void glColorMask(boolean red, boolean green, boolean blue, boolean alpha) {
         final GLContextState glCtx = ctx();
+        glCtx.exitCapture.writeDepthColor(ExitStateCapture.COLOR_MASK);
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
             DisplayListManager.recordColorMask(red, green, blue, alpha);
@@ -2186,6 +2365,7 @@ public class GLStateManager {
 
     // Clear Color
     public static void glClearColor(float red, float green, float blue, float alpha) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
@@ -2205,7 +2385,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glClearDepth through tracked GL state and the active render backend. */
     public static void glClearDepth(double depth) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
@@ -2232,9 +2414,11 @@ public class GLStateManager {
         enableAlphaTest(ctx());
     }
 
+    /** Updates enable alpha test state for GLStateManager. */
     private static void enableAlphaTest(GLContextState glCtx) {
         final DeferredAlphaHandler ah = GLSMHooks.alphaHandler;
         if (ah != null && ah.isAlphaTestLocked()) {
+            glCtx.exitCapture.capability(GL11.GL_ALPHA_TEST, -1);
             glCtx.alphaTest.beforeModify();
             if (ah.deferAlphaTestToggle(true) && GLSMHooks.ALPHA_STATE_CHANGE.hasListeners()) {
                 GLSMHooks.ALPHA_STATE_CHANGE.post(GLSMHooks.alphaStateChangeEvent);
@@ -2262,9 +2446,11 @@ public class GLStateManager {
         disableAlphaTest(ctx());
     }
 
+    /** Updates disable alpha test state for GLStateManager. */
     private static void disableAlphaTest(GLContextState glCtx) {
         final DeferredAlphaHandler ah = GLSMHooks.alphaHandler;
         if (ah != null && ah.isAlphaTestLocked()) {
+            glCtx.exitCapture.capability(GL11.GL_ALPHA_TEST, -1);
             glCtx.alphaTest.beforeModify();
             if (ah.deferAlphaTestToggle(false) && GLSMHooks.ALPHA_STATE_CHANGE.hasListeners()) {
                 GLSMHooks.ALPHA_STATE_CHANGE.post(GLSMHooks.alphaStateChangeEvent);
@@ -2281,8 +2467,10 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glAlphaFunc through tracked GL state and the active render backend. */
     public static void glAlphaFunc(int function, float reference) {
         final GLContextState glCtx = ctx();
+        glCtx.exitCapture.writeAlpha();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
             DisplayListManager.recordAlphaFunc(function, reference);
@@ -2312,6 +2500,8 @@ public class GLStateManager {
 
     // Textures
     public static void glActiveTexture(int texture) {
+        final GLContextState glCtx = ctx();
+        glCtx.exitCapture.write(ExitStateCapture.ACTIVE_UNIT);
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
             DisplayListManager.recordActiveTexture(texture);
@@ -2324,8 +2514,8 @@ public class GLStateManager {
             return;
         }
         final boolean caching = isCachingEnabled();
-        if (!caching || getActiveTextureUnit() != newTexture) {
-            mod(ctx().activeTextureUnit).setValue(newTexture);
+        if (!caching || glCtx.activeTextureUnit.getValue() != newTexture) {
+            mod(glCtx.activeTextureUnit).setValue(newTexture);
             RENDER_BACKEND.activeTexture(texture);
         }
     }
@@ -2348,12 +2538,15 @@ public class GLStateManager {
         glActiveTexture(texture);
     }
 
+    /** Handles glClientActiveTexture through tracked GL state and the active render backend. */
     public static void glClientActiveTexture(int texture) {
         final int unit = texture - GL13.GL_TEXTURE0;
         if (!isValidTextureUnit(unit, MAX_TEXTURE_COORDS, texture, "glClientActiveTexture")) {
             return;
         }
-        ctx().clientActiveTextureUnit = unit;
+        final GLContextState glCtx = ctx();
+        glCtx.exitCapture.write(ExitStateCapture.CLIENT_ACTIVE_UNIT);
+        glCtx.clientActiveTextureUnit = unit;
     }
 
     public static int getClientActiveTextureUnit() {
@@ -2372,9 +2565,11 @@ public class GLStateManager {
         return ctx().textures.getTextureUnitBindings(unit).getBinding();
     }
 
+    /** Handles glBindTexture through tracked GL state and the active render backend. */
     public static void glBindTexture(int target, int texture) {
         if (TextureInfoCache.isProxyTarget(target)) return;
         final GLContextState glCtx = ctx();
+        recordExitTextureBind(glCtx, target, glCtx.activeTextureUnit.getValue());
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
             DisplayListManager.recordBindTexture(target, texture);
@@ -2383,18 +2578,28 @@ public class GLStateManager {
             }
         }
         // Rebinding a deferred-delete texture rescues it (Mesa/compat-profile behavior)
+        long rescued = DEFERRED_ABSENT;
+        boolean rejected = false;
         if (texture != 0) {
             final boolean locked = acquireDrawLock();
             try {
-                deferredDeleteTextures.remove(texture);
-                if (target != GL11.GL_TEXTURE_2D) unshrinkableTextures.add(texture);
+                final long state = deferredDeleteTextures.isEmpty() ? DEFERRED_ABSENT : deferredDeleteTextures.get(texture);
+                if (state == DEFERRED_ABSENT) {
+                    recordTarget(texture, target);
+                } else if (non2DTextureTargets.get(texture) == target) {
+                    rescued = deferredDeleteTextures.remove(texture);
+                } else {
+                    rejected = true;
+                }
             } finally {
                 if (locked) releaseDrawLock();
             }
         }
+        if (rejected) return;
 
         if (!isCachingEnabled()) {
             RENDER_BACKEND.bindTexture(target, texture);
+            if (rescued != DEFERRED_ABSENT) resetRescuedTexture(target, texture, rescued);
             return;
         }
 
@@ -2420,6 +2625,60 @@ public class GLStateManager {
                 glCtx.lockBindCallback = false;
             }
         }
+        if (rescued != DEFERRED_ABSENT) resetRescuedTexture(target, texture, rescued);
+    }
+
+    /** Binds texture unit by name for GLStateManager. */
+    private static void bindTextureUnitByName(int unit, int texture) {
+        if (isDeferredDelete(texture)) return;
+        final CommandRecorder paused = DisplayListManager.pauseRecording();
+        final int saved = getActiveTextureUnit();
+        try {
+            glActiveTexture(GL13.GL_TEXTURE0 + unit);
+            if (texture == 0) {
+                // Read before the 2D unbind, which overwrites the unit's cached target.
+                final int target = ctx().textures.getTextureUnitBindings(unit).getTarget();
+                glBindTexture(GL11.GL_TEXTURE_2D, 0);
+                if (!is2D(target)) glBindTexture(target, 0);
+            } else {
+                glBindTexture(non2DTextureTargets.get(texture), texture);
+            }
+        } finally {
+            glActiveTexture(GL13.GL_TEXTURE0 + saved);
+            if (paused != null) DisplayListManager.resumeRecording(paused);
+        }
+    }
+
+    /** Handles glBindTextures through tracked GL state and the active render backend. */
+    public static void glBindTextures(int first, int count, IntBuffer textures) {
+        if (first < 0 || !isValidTextureUnit(first + count - 1, GL13.GL_TEXTURE0 + first + count - 1, "glBindTextures")) return;
+        if (textures != null) requireRemaining(textures, count);
+        for (int i = 0; i < count; i++) bindTextureUnitByName(first + i, textures == null ? 0 : textures.get(textures.position() + i));
+    }
+
+    /** Handles glBindTextures through tracked GL state and the active render backend. */
+    public static void glBindTextures(int first, IntBuffer textures) {
+        if (textures != null) glBindTextures(first, textures.remaining(), textures);
+    }
+
+    /** Handles glBindTextures through tracked GL state and the active render backend. */
+    public static void glBindTextures(int first, int[] textures) {
+        if (textures != null) glBindTextures(first, textures.length, IntBuffer.wrap(textures));
+    }
+
+    /** Handles glBindTextureUnit through tracked GL state and the active render backend. */
+    public static void glBindTextureUnit(int unit, int texture) {
+        if (isValidTextureUnit(unit, GL13.GL_TEXTURE0 + unit, "glBindTextureUnit")) bindTextureUnitByName(unit, texture);
+    }
+
+    /** Handles glBindMultiTextureEXT through tracked GL state and the active render backend. */
+    public static void glBindMultiTextureEXT(int texunit, int target, int texture) {
+        if (DisplayListManager.isRecording()) throw DisplayListManager.unsupportedInList("glBindMultiTextureEXT");
+        if (!isValidTextureUnit(texunit - GL13.GL_TEXTURE0, texunit, "glBindMultiTextureEXT")) return;
+        final int saved = getActiveTextureUnit();
+        glActiveTexture(texunit);
+        glBindTexture(target, texture);
+        glActiveTexture(GL13.GL_TEXTURE0 + saved);
     }
 
     private static int changeFormatIfDeprecated(int internalformat) {
@@ -2458,7 +2717,9 @@ public class GLStateManager {
         return GLESFormatRemap.typeForInternalFormatES32(internalformat, type);
     }
 
+    /** Handles glTexImage2D through tracked GL state and the active render backend. */
     public static void glTexImage2D(int target, int level, int internalformat, int width, int height, int border, int format, int type, IntBuffer pixels) {
+        rejectExitCapture();
         internalformat = changeFormatIfDeprecated(internalformat);
         type = remapPixelTypeForGLES(format, type);
         type = remapTypeForRemappedInternalFormat(internalformat, type);
@@ -2477,7 +2738,9 @@ public class GLStateManager {
         maybeGenerateMipmap(target, level);
     }
 
+    /** Handles glTexImage2D through tracked GL state and the active render backend. */
     public static void glTexImage2D(int target, int level, int internalformat, int width, int height, int border, int format, int type, FloatBuffer pixels) {
+        rejectExitCapture();
         internalformat = changeFormatIfDeprecated(internalformat);
         type = remapPixelTypeForGLES(format, type);
         type = remapTypeForRemappedInternalFormat(internalformat, type);
@@ -2496,7 +2759,9 @@ public class GLStateManager {
         maybeGenerateMipmap(target, level);
     }
 
+    /** Handles glTexImage2D through tracked GL state and the active render backend. */
     public static void glTexImage2D(int target, int level, int internalformat, int width, int height, int border, int format, int type, DoubleBuffer pixels) {
+        rejectExitCapture();
         internalformat = changeFormatIfDeprecated(internalformat);
         type = remapPixelTypeForGLES(format, type);
         type = remapTypeForRemappedInternalFormat(internalformat, type);
@@ -2515,7 +2780,9 @@ public class GLStateManager {
         maybeGenerateMipmap(target, level);
     }
 
+    /** Handles glTexImage2D through tracked GL state and the active render backend. */
     public static void glTexImage2D(int target, int level, int internalformat, int width, int height, int border, int format, int type, ByteBuffer pixels) {
+        rejectExitCapture();
         internalformat = changeFormatIfDeprecated(internalformat);
         type = remapPixelTypeForGLES(format, type);
         type = remapTypeForRemappedInternalFormat(internalformat, type);
@@ -2534,7 +2801,9 @@ public class GLStateManager {
         maybeGenerateMipmap(target, level);
     }
 
+    /** Handles glTexImage2D through tracked GL state and the active render backend. */
     public static void glTexImage2D(int target, int level, int internalformat, int width, int height, int border, int format, int type, long pixels_buffer_offset) {
+        rejectExitCapture();
         internalformat = changeFormatIfDeprecated(internalformat);
         type = remapPixelTypeForGLES(format, type);
         type = remapTypeForRemappedInternalFormat(internalformat, type);
@@ -2626,16 +2895,34 @@ public class GLStateManager {
         glCtx.dirtyTexCoordAttrib = true;
     }
 
+    /** Handles glDeleteTextures through tracked GL state and the active render backend. */
     public static void glDeleteTextures(int id) {
-        deferDeleteTexture(id);
-        onDeleteTexture(id);
+        rejectExitCapture();
+        deleteTexture(id);
     }
 
+    /** Handles glDeleteTextures through tracked GL state and the active render backend. */
     public static void glDeleteTextures(IntBuffer ids) {
+        rejectExitCapture();
         for (int i = 0; i < ids.remaining(); i++) {
-            final int id = ids.get(ids.position() + i);
+            deleteTexture(ids.get(ids.position() + i));
+        }
+    }
+
+    /** Handles glDeleteTextures through tracked GL state and the active render backend. */
+    public static void glDeleteTextures(int[] ids) {
+        rejectExitCapture();
+        for (int id : ids) deleteTexture(id);
+    }
+
+    /** Deletes the texture and invalidates its dependent resource references. */
+    private static void deleteTexture(int id) {
+        if (Tracy.ENABLED) Tracy.beginZone(Z_TEX_DELETE);
+        try {
             deferDeleteTexture(id);
             onDeleteTexture(id);
+        } finally {
+            if (Tracy.ENABLED) Tracy.endZone();
         }
     }
 
@@ -2644,74 +2931,292 @@ public class GLStateManager {
      * Why you might ask?  In compat profile if you bind a texture that doesn't exist, ie a deleted texture,
      * mesa will silently create it for you, in core this is an error.  Why would you be binding a deleted texture?
      * Damned if I know, but vanilla and mods do it... they create one, delete it, and then bind it....
-     *
-     * So... we shrink the texture to 1x1 to free GPU memory, unbind from all units, but keep the name valid.
      * */
     private static void deferDeleteTexture(int id) {
         final GLContextState glCtx = ctx();
         if (id == 0) return;
 
         final int savedUnit = glCtx.activeTextureUnit.getValue();
-        final TextureBindingStack savedUnitBindings = glCtx.textures.getTextureUnitBindings(savedUnit);
-        final int savedBinding = savedUnitBindings.getBinding();
-        final int savedTarget = savedUnitBindings.getTarget();
-        boolean changedUnit = false;
+        int activeUnit = savedUnit;
 
         // Unbind from all units that have this texture
         for (int i = 0; i <= glCtx.maxBoundTextureUnit; i++) {
             final TextureBindingStack unitBindings = glCtx.textures.getTextureUnitBindings(i);
             if (unitBindings.getBinding() == id) {
-                if (i != savedUnit) {
+                if (i != activeUnit) {
                     RENDER_BACKEND.activeTexture(GL13.GL_TEXTURE0 + i);
-                    changedUnit = true;
+                    activeUnit = i;
                 }
                 final int unitTarget = unitBindings.getTarget();
                 RENDER_BACKEND.bindTexture(unitTarget == 0 ? GL11.GL_TEXTURE_2D : unitTarget, 0);
             }
         }
 
-        // Restore active unit, then shrink the texture via a temporary bind
-        if (changedUnit) {
+        for (int i = 0; i <= glCtx.maxBoundImageUnit; i++) {
+            final ImageUnitBinding image = glCtx.imageUnits.get(i);
+            if (image != null && image.getTexture() == id) {
+                RENDER_BACKEND.bindImageTexture(i, 0, 0, false, 0, GL15.GL_READ_ONLY, GL30.GL_R8);
+            }
+        }
+
+        if (activeUnit != savedUnit) {
             RENDER_BACKEND.activeTexture(GL13.GL_TEXTURE0 + savedUnit);
         }
 
-        final boolean shrinkable;
+        final TextureBindingStack savedBindings = glCtx.textures.getTextureUnitBindings(savedUnit);
+        if (!is2D(savedBindings.getTarget()) && previous2D(savedBindings) == id) restoreUnitAfter2DBind(savedBindings, id, id);
+
         final boolean locked = acquireDrawLock();
         try {
-            shrinkable = !unshrinkableTextures.contains(id);
-            deferredDeleteTextures.add(id);
+            detachFromFramebuffer(glCtx, GL30.GL_DRAW_FRAMEBUFFER, glCtx.drawFramebuffer, id);
+            if (glCtx.readFramebuffer != glCtx.drawFramebuffer) detachFromFramebuffer(glCtx, GL30.GL_READ_FRAMEBUFFER, glCtx.readFramebuffer, id);
+            if (textureFramebufferRefs.get(id) > 0) deferredDeleteTextures.put(id, DEFERRED_ATTACHED);
+            else scheduleRelease(id);
         } finally {
             if (locked) releaseDrawLock();
         }
-        if (!shrinkable) return;
+    }
 
-        RENDER_BACKEND.bindTexture(GL11.GL_TEXTURE_2D, id);
-        RENDER_BACKEND.texParameteri(GL11.GL_TEXTURE_2D, GL12.GL_TEXTURE_MAX_LEVEL, 0);
+    /** Updates schedule release state for GLStateManager. */
+    private static void scheduleRelease(int id) {
+        deferredDeleteTextures.put(id, frameIndex);
+        nextReleaseFrame = Math.min(nextReleaseFrame, frameIndex + RELEASE_DELAY_FRAMES);
+    }
+
+    /** Reports whether deferred delete applies to GLStateManager. */
+    private static boolean isDeferredDelete(int texture) {
+        if (texture == 0 || deferredDeleteTextures.isEmpty()) return false;
+        final boolean locked = acquireDrawLock();
+        try {
+            return deferredDeleteTextures.containsKey(texture);
+        } finally {
+            if (locked) releaseDrawLock();
+        }
+    }
+
+    /** Updates on frame end state for GLStateManager. */
+    public static void onFrameEnd() {
+        frameIndex++;
+        if (!splashComplete || frameIndex < nextReleaseFrame) return;
+        nextReleaseFrame = Long.MAX_VALUE;
+        for (Int2LongMap.Entry entry : Int2LongMaps.fastIterable(deferredDeleteTextures)) {
+            final long since = entry.getLongValue();
+            if (since < 0) continue;
+            if (frameIndex - since < RELEASE_DELAY_FRAMES) {
+                nextReleaseFrame = Math.min(nextReleaseFrame, since + RELEASE_DELAY_FRAMES);
+                continue;
+            }
+            final int id = entry.getIntKey();
+            if (non2DTextureTargets.get(id) == GL11.GL_TEXTURE_2D) releaseStorage2D(id);
+            entry.setValue(DEFERRED_RELEASED);
+        }
+    }
+
+    /** Returns the deferred textures awaiting release result for GLStateManager. */
+    public static int deferredTexturesAwaitingRelease() {
+        int count = 0;
+        final LongIterator it = deferredDeleteTextures.values().iterator();
+        while (it.hasNext()) {
+            if (it.nextLong() != DEFERRED_RELEASED) count++;
+        }
+        return count;
+    }
+
+    /** Releases storage2 d for GLStateManager. */
+    private static void releaseStorage2D(int id) {
+        if (Tracy.ENABLED) Tracy.beginZone(Z_TEX_RELEASE_STORAGE);
+        try {
+            final TextureBindingStack unit = ctx().textures.getTextureUnitBindings(getActiveTextureUnit());
+            final int previous2D = previous2D(unit);
+            RENDER_BACKEND.bindTexture(GL11.GL_TEXTURE_2D, id);
+            if (bindTook(GL11.GL_TEXTURE_2D, id)) releaseBoundStorage2D();
+            restoreUnitAfter2DBind(unit, id, previous2D);
+        } finally {
+            if (Tracy.ENABLED) Tracy.endZone();
+        }
+    }
+
+    /** Restores unit after2 d bind for GLStateManager. */
+    private static void restoreUnitAfter2DBind(TextureBindingStack unit, int deleted, int previous2D) {
+        RENDER_BACKEND.bindTexture(GL11.GL_TEXTURE_2D, previous2D == deleted ? 0 : previous2D);
+        final int target = unit.getTarget();
+        if (is2D(target)) return;
+        RENDER_BACKEND.bindTexture(target, unit.getBinding() == deleted ? 0 : unit.getBinding());
+    }
+
+    /** Returns the is2 d result for GLStateManager. */
+    private static boolean is2D(int target) {
+        return target == 0 || target == GL11.GL_TEXTURE_2D;
+    }
+
+    /** Returns the previous2 d result for GLStateManager. */
+    private static int previous2D(TextureBindingStack unit) {
+        return is2D(unit.getTarget()) ? unit.getBinding() : RENDER_BACKEND.getInteger(GL11.GL_TEXTURE_BINDING_2D);
+    }
+
+    /** Records target for GLStateManager. */
+    private static void recordTarget(int texture, int target) {
+        if (target != GL11.GL_TEXTURE_2D) non2DTextureTargets.put(texture, target);
+    }
+
+    /** Releases bound storage2 d for GLStateManager. */
+    private static void releaseBoundStorage2D() {
+        if (RenderSystem.supportsTextureStorage() && RENDER_BACKEND.getTexParameteri(GL11.GL_TEXTURE_2D, GL42.GL_TEXTURE_IMMUTABLE_FORMAT) != 0) return;
+        final int size = Math.max(RENDER_BACKEND.getTexLevelParameteri(GL11.GL_TEXTURE_2D, 0, GL11.GL_TEXTURE_WIDTH), RENDER_BACKEND.getTexLevelParameteri(GL11.GL_TEXTURE_2D, 0, GL11.GL_TEXTURE_HEIGHT));
+        final int levels = Math.max(1, 32 - Integer.numberOfLeadingZeros(size));
         suspendPixelUnpackBuffer();
-        RENDER_BACKEND.texImage2D(GL11.GL_TEXTURE_2D, 0, GL30.GL_R8, 1, 1, 0, GL11.GL_RED, GL11.GL_UNSIGNED_BYTE, (ByteBuffer) null);
+        for (int level = 0; level < levels; level++) {
+            RENDER_BACKEND.texImage2D(GL11.GL_TEXTURE_2D, level, GL11.GL_RGBA8, 0, 0, 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, (ByteBuffer) null);
+        }
         restorePixelUnpackBuffer();
+    }
 
-        // Restore previous binding on active unit
-        final boolean savedIs2D = savedTarget == GL11.GL_TEXTURE_2D || savedTarget == 0;
-        RENDER_BACKEND.bindTexture(GL11.GL_TEXTURE_2D, savedBinding == id || !savedIs2D ? 0 : savedBinding);
+    /** Binds took for GLStateManager. */
+    private static boolean bindTook(int target, int texture) {
+        return RENDER_BACKEND.getInteger(TextureTargets.bindingQuery(target)) == texture;
+    }
+
+    /** Resets rescued texture for GLStateManager. */
+    private static void resetRescuedTexture(int target, int texture, long state) {
+        if (Tracy.ENABLED) Tracy.beginZone(Z_TEX_RESCUE_RESET);
+        try {
+            if (!bindTook(target, texture)) return;
+            if (target == GL11.GL_TEXTURE_2D && state >= 0) releaseBoundStorage2D();
+            if (target == GL31.GL_TEXTURE_BUFFER || target == GL32.GL_TEXTURE_2D_MULTISAMPLE || target == GL32.GL_TEXTURE_2D_MULTISAMPLE_ARRAY) return;
+            final boolean rectangle = target == GL31.GL_TEXTURE_RECTANGLE;
+            final int wrap = rectangle ? GL12.GL_CLAMP_TO_EDGE : GL11.GL_REPEAT;
+            RENDER_BACKEND.texParameteri(target, GL11.GL_TEXTURE_MIN_FILTER, rectangle ? GL11.GL_LINEAR : GL11.GL_NEAREST_MIPMAP_LINEAR);
+            RENDER_BACKEND.texParameteri(target, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR);
+            RENDER_BACKEND.texParameteri(target, GL11.GL_TEXTURE_WRAP_S, wrap);
+            RENDER_BACKEND.texParameteri(target, GL11.GL_TEXTURE_WRAP_T, wrap);
+            RENDER_BACKEND.texParameteri(target, GL12.GL_TEXTURE_WRAP_R, wrap);
+            RENDER_BACKEND.texParameteri(target, GL12.GL_TEXTURE_BASE_LEVEL, 0);
+            if (!rectangle) RENDER_BACKEND.texParameteri(target, GL12.GL_TEXTURE_MAX_LEVEL, 1000);
+            RENDER_BACKEND.texParameterf(target, GL12.GL_TEXTURE_MIN_LOD, -1000.0f);
+            RENDER_BACKEND.texParameterf(target, GL12.GL_TEXTURE_MAX_LOD, 1000.0f);
+            RENDER_BACKEND.texParameteri(target, GL14.GL_TEXTURE_COMPARE_MODE, GL11.GL_NONE);
+            RENDER_BACKEND.texParameteri(target, GL14.GL_TEXTURE_COMPARE_FUNC, GL11.GL_LEQUAL);
+            RENDER_BACKEND.texParameteri(target, GL33.GL_TEXTURE_SWIZZLE_R, GL11.GL_RED);
+            RENDER_BACKEND.texParameteri(target, GL33.GL_TEXTURE_SWIZZLE_G, GL11.GL_GREEN);
+            RENDER_BACKEND.texParameteri(target, GL33.GL_TEXTURE_SWIZZLE_B, GL11.GL_BLUE);
+            RENDER_BACKEND.texParameteri(target, GL33.GL_TEXTURE_SWIZZLE_A, GL11.GL_ALPHA);
+            if (!RenderSystem.isGLES()) {
+                RENDER_BACKEND.texParameterf(target, GL14.GL_TEXTURE_LOD_BIAS, 0.0f);
+                RENDER_BACKEND.texParameterfv(target, GL11.GL_TEXTURE_BORDER_COLOR, TRANSPARENT_BLACK);
+            }
+            if (RenderSystem.supportsStencilTexturing()) RENDER_BACKEND.texParameteri(target, GL43.GL_DEPTH_STENCIL_TEXTURE_MODE, GL11.GL_DEPTH_COMPONENT);
+            if (RENDER_BACKEND.isAnisotropicSupported()) RENDER_BACKEND.texParameterf(target, EXTTextureFilterAnisotropic.GL_TEXTURE_MAX_ANISOTROPY_EXT, 1.0f);
+        } finally {
+            if (Tracy.ENABLED) Tracy.endZone();
+        }
     }
 
     /** Flush deferred deletes so the driver can recycle names. */
     private static void flushDeferredTextureDeletes() {
         if (!splashComplete || deferredDeleteTextures.isEmpty()) return;
-        final GLContextState primary = primaryContext();
-        final GLContextState[] drawables = drawableContextStates;
-        final var it = deferredDeleteTextures.iterator();
-        while (it.hasNext()) {
-            final int id = it.nextInt();
-            RENDER_BACKEND.deleteTextures(id);
-            unshrinkableTextures.remove(id);
-            clearTextureBindings(primary, id);
-            for (int i = 0; i < drawables.length; i++) {
-                clearTextureBindings(drawables[i], id);
+        if (Tracy.ENABLED) Tracy.beginZone(Z_TEX_FLUSH_DELETES);
+        try {
+            final GLContextState primary = primaryContext();
+            final GLContextState[] drawables = drawableContextStates;
+            final var it = Int2LongMaps.fastIterator(deferredDeleteTextures);
+            while (it.hasNext()) {
+                final Int2LongMap.Entry entry = it.next();
+                if (entry.getLongValue() == DEFERRED_ATTACHED) continue;
+                final int id = entry.getIntKey();
+                it.remove();
+                RENDER_BACKEND.deleteTextures(id);
+                non2DTextureTargets.remove(id);
+                clearTextureBindings(primary, id);
+                for (int i = 0; i < drawables.length; i++) {
+                    clearTextureBindings(drawables[i], id);
+                }
             }
+        } finally {
+            if (Tracy.ENABLED) Tracy.endZone();
         }
-        deferredDeleteTextures.clear();
+    }
+
+    private static final int DEPTH_SLOT = 16;
+    private static final int STENCIL_SLOT = 17;
+    private static final int FRAMEBUFFER_SLOTS = 18;
+
+    /** Returns the attachment slot result for GLStateManager. */
+    private static int attachmentSlot(int attachment) {
+        return switch (attachment) {
+            case GL30.GL_DEPTH_ATTACHMENT -> DEPTH_SLOT;
+            case GL30.GL_STENCIL_ATTACHMENT -> STENCIL_SLOT;
+            default -> attachment >= GL30.GL_COLOR_ATTACHMENT0 && attachment <= GL30.GL_COLOR_ATTACHMENT15 ? attachment - GL30.GL_COLOR_ATTACHMENT0 : -1;
+        };
+    }
+
+    /** Returns the slot attachment result for GLStateManager. */
+    private static int slotAttachment(int slot) {
+        return switch (slot) {
+            case DEPTH_SLOT -> GL30.GL_DEPTH_ATTACHMENT;
+            case STENCIL_SLOT -> GL30.GL_STENCIL_ATTACHMENT;
+            default -> GL30.GL_COLOR_ATTACHMENT0 + slot;
+        };
+    }
+
+    /** Begins attach for GLStateManager. */
+    private static boolean beginAttach(int target, int attachment, int texture) {
+        final GLContextState glCtx = ctx();
+        return beginAttach(glCtx, target == GL30.GL_READ_FRAMEBUFFER ? glCtx.readFramebuffer : glCtx.drawFramebuffer, attachment, texture);
+    }
+
+    /** Begins attach for GLStateManager. */
+    private static boolean beginAttach(GLContextState glCtx, int framebuffer, int attachment, int texture) {
+        if (isDeferredDelete(texture)) return false;
+        TextureInfoCache.INSTANCE.onWrittenOutsideUploads(texture);
+        trackFramebufferAttachment(glCtx, framebuffer, attachment, texture);
+        return true;
+    }
+
+    /** Tracks framebuffer attachment for GLStateManager. */
+    private static void trackFramebufferAttachment(GLContextState glCtx, int framebuffer, int attachment, int texture) {
+        if (framebuffer == 0) return;
+        if (attachment == GL30.GL_DEPTH_STENCIL_ATTACHMENT) {
+            trackFramebufferAttachment(glCtx, framebuffer, GL30.GL_DEPTH_ATTACHMENT, texture);
+            trackFramebufferAttachment(glCtx, framebuffer, GL30.GL_STENCIL_ATTACHMENT, texture);
+            return;
+        }
+        final int slot = attachmentSlot(attachment);
+        if (slot < 0) return;
+        int[] slots = glCtx.framebufferTextures.get(framebuffer);
+        if (slots == null) {
+            if (texture == 0) return;
+            slots = new int[FRAMEBUFFER_SLOTS];
+            glCtx.framebufferTextures.put(framebuffer, slots);
+        }
+        setFramebufferSlot(slots, slot, texture);
+    }
+
+    /** Updates framebuffer slot for GLStateManager. */
+    private static void setFramebufferSlot(int[] slots, int slot, int texture) {
+        final int previous = slots[slot];
+        if (previous == texture) return;
+        slots[slot] = texture;
+        final boolean locked = acquireDrawLock();
+        try {
+            if (texture != 0) textureFramebufferRefs.addTo(texture, 1);
+            if (previous != 0 && textureFramebufferRefs.addTo(previous, -1) == 1) {
+                textureFramebufferRefs.remove(previous);
+                if (deferredDeleteTextures.get(previous) == DEFERRED_ATTACHED) scheduleRelease(previous);
+            }
+        } finally {
+            if (locked) releaseDrawLock();
+        }
+    }
+
+    /** Updates detach from framebuffer state for GLStateManager. */
+    private static void detachFromFramebuffer(GLContextState glCtx, int target, int framebuffer, int texture) {
+        final int[] slots = glCtx.framebufferTextures.get(framebuffer);
+        if (slots == null) return;
+        for (int slot = 0; slot < slots.length; slot++) {
+            if (slots[slot] != texture) continue;
+            RENDER_BACKEND.framebufferTexture2D(target, slotAttachment(slot), GL11.GL_TEXTURE_2D, 0, 0);
+            setFramebufferSlot(slots, slot, 0);
+        }
     }
 
     public static int glGenTextures() {
@@ -2724,6 +3229,36 @@ public class GLStateManager {
         requireContext("glGenTextures");
         flushDeferredTextureDeletes();
         RENDER_BACKEND.genTextures(textures);
+    }
+
+    /** Handles glGenTextures through tracked GL state and the active render backend. */
+    public static void glGenTextures(int[] textures) {
+        requireContext("glGenTextures");
+        flushDeferredTextureDeletes();
+        for (int i = 0; i < textures.length; i++) textures[i] = RENDER_BACKEND.genTextures();
+    }
+
+    /** Handles glCreateTextures through tracked GL state and the active render backend. */
+    public static int glCreateTextures(int target) {
+        requireContext("glCreateTextures");
+        final int id = RENDER_BACKEND.createTextures(target);
+        final boolean locked = acquireDrawLock();
+        try {
+            recordTarget(id, target);
+        } finally {
+            if (locked) releaseDrawLock();
+        }
+        return id;
+    }
+
+    /** Handles glCreateTextures through tracked GL state and the active render backend. */
+    public static void glCreateTextures(int target, IntBuffer textures) {
+        for (int i = textures.position(); i < textures.limit(); i++) textures.put(i, glCreateTextures(target));
+    }
+
+    /** Handles glCreateTextures through tracked GL state and the active render backend. */
+    public static void glCreateTextures(int target, int[] textures) {
+        for (int i = 0; i < textures.length; i++) textures[i] = glCreateTextures(target);
     }
 
     public static void enableTexture() {
@@ -2791,7 +3326,9 @@ public class GLStateManager {
         glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, j);
     }
 
+    /** Handles glBegin through tracked GL state and the active render backend. */
     public static void glBegin(int mode) {
+        rejectExitCapture();
         ctx().unit23TexCoordSetDuringDraw = false;
         if (DisplayListManager.isRecording()) {
             ImmediateModeRecorder.begin(mode);
@@ -2800,7 +3337,9 @@ public class GLStateManager {
         ImmediateModeRecorder.beginLive(mode);
     }
 
+    /** Handles glEnd through tracked GL state and the active render backend. */
     public static void glEnd() {
+        rejectExitCapture();
         final DirectTessellator result = ImmediateModeRecorder.end();
         if (result != null) {
             if (DisplayListManager.isRecording()) {
@@ -2861,7 +3400,9 @@ public class GLStateManager {
         prepareClientArrays(glCtx);
     }
 
+    /** Handles glDrawElements through tracked GL state and the active render backend. */
     public static void glDrawElements(int mode, ByteBuffer indices) {
+        rejectExitCapture();
         drawCalls++;
         CommandRecorder savedRecorder = null;
         final RecordMode recordMode = DisplayListManager.getRecordMode();
@@ -2893,7 +3434,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glDrawElements through tracked GL state and the active render backend. */
     public static void glDrawElements(int mode, IntBuffer indices) {
+        rejectExitCapture();
         drawCalls++;
         CommandRecorder savedRecorder = null;
         final RecordMode recordMode = DisplayListManager.getRecordMode();
@@ -2925,7 +3468,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glDrawElements through tracked GL state and the active render backend. */
     public static void glDrawElements(int mode, ShortBuffer indices) {
+        rejectExitCapture();
         drawCalls++;
         CommandRecorder savedRecorder = null;
         final RecordMode recordMode = DisplayListManager.getRecordMode();
@@ -2957,7 +3502,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glDrawElements through tracked GL state and the active render backend. */
     public static void glDrawElements(int mode, int count, int type, ByteBuffer indices) {
+        rejectExitCapture();
         drawCalls++;
         CommandRecorder savedRecorder = null;
         final RecordMode recordMode = DisplayListManager.getRecordMode();
@@ -2989,7 +3536,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glDrawElements through tracked GL state and the active render backend. */
     public static void glDrawElements(int mode, int indices_count, int type, long indices_buffer_offset) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         drawCalls++;
         CommandRecorder savedRecorder = null;
@@ -3032,7 +3581,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glDrawBuffer through tracked GL state and the active render backend. */
     public static void glDrawBuffer(int mode) {
+        rejectExitCapture();
         final RecordMode recordMode = DisplayListManager.getRecordMode();
         if (recordMode != RecordMode.NONE) {
             DisplayListManager.recordDrawBuffer(mode);
@@ -3045,22 +3596,30 @@ public class GLStateManager {
         RENDER_BACKEND.drawBuffer(mode);
     }
 
+    /** Handles glMultiDrawElementsIndirect through tracked GL state and the active render backend. */
     public static void glMultiDrawElementsIndirect(int mode, int type, long indirect, int drawcount, int stride) {
+        rejectExitCapture();
         drawCalls += drawcount;
         RENDER_BACKEND.multiDrawElementsIndirect(mode, type, indirect, drawcount, stride);
     }
 
+    /** Handles glMultiDrawElementsBaseVertex through tracked GL state and the active render backend. */
     public static void glMultiDrawElementsBaseVertex(int mode, long pCount, int type, long pIndices, int drawcount, long pBaseVertex) {
+        rejectExitCapture();
         drawCalls += drawcount;
         RENDER_BACKEND.multiDrawElementsBaseVertex(mode, pCount, type, pIndices, drawcount, pBaseVertex);
     }
 
+    /** Handles glDrawElementsBaseVertex through tracked GL state and the active render backend. */
     public static void glDrawElementsBaseVertex(int mode, int count, int type, long indices, int basevertex) {
+        rejectExitCapture();
         drawCalls++;
         RENDER_BACKEND.drawElementsBaseVertex(mode, count, type, indices, basevertex);
     }
 
+    /** Handles glDrawElementsInstanced through tracked GL state and the active render backend. */
     public static void glDrawElementsInstanced(int mode, int count, int type, long indices, int primcount) {
+        rejectExitCapture();
         drawCalls++;
         final GLContextState glCtx = ctx();
         final boolean locked = acquireDrawLock();
@@ -3077,7 +3636,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glDrawArraysInstanced through tracked GL state and the active render backend. */
     public static void glDrawArraysInstanced(int mode, int first, int count, int primcount) {
+        rejectExitCapture();
         drawCalls++;
         final GLContextState glCtx = ctx();
         final boolean locked = acquireDrawLock();
@@ -3100,7 +3661,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glDrawRangeElements through tracked GL state and the active render backend. */
     public static void glDrawRangeElements(int mode, int start, int end, int count, int type, long indices) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final boolean locked = acquireDrawLock();
         try {
@@ -3115,11 +3678,15 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glDrawRangeElementsBaseVertex through tracked GL state and the active render backend. */
     public static void glDrawRangeElementsBaseVertex(int mode, int start, int end, int count, int type, long indices, int baseVertex) {
+        rejectExitCapture();
         RENDER_BACKEND.drawRangeElementsBaseVertex(mode, start, end, count, type, indices, baseVertex);
     }
 
+    /** Handles glMultiDrawArrays through tracked GL state and the active render backend. */
     public static void glMultiDrawArrays(int mode, IntBuffer firsts, IntBuffer counts) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final boolean locked = acquireDrawLock();
         try {
@@ -3138,7 +3705,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glPrimitiveRestartIndex through tracked GL state and the active render backend. */
     public static void glPrimitiveRestartIndex(int index) {
+        rejectExitCapture();
         RENDER_BACKEND.primitiveRestartIndex(index);
     }
 
@@ -3162,7 +3731,9 @@ public class GLStateManager {
         pointParameter(pname, params.get(pos), attenuation ? params.get(pos + 1) : 0.0f, attenuation ? params.get(pos + 2) : 0.0f);
     }
 
+    /** Updates point parameter state for GLStateManager. */
     private static void pointParameter(int pname, float v0, float v1, float v2) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final PointStateStack point = glCtx.pointState;
         switch (pname) {
@@ -3250,7 +3821,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glDrawArrays through tracked GL state and the active render backend. */
     public static void glDrawArrays(int mode, int first, int count) {
+        rejectExitCapture();
         drawCalls++;
         CommandRecorder savedRecorder = null;
         final RecordMode recordMode = DisplayListManager.getRecordMode();
@@ -3262,6 +3835,7 @@ public class GLStateManager {
             if (recordMode == RecordMode.COMPILE) {
                 return;
             }
+            DisplayListManager.flushAll();
             savedRecorder = DisplayListManager.pauseRecording();
         } else if (FeedbackManager.isFeedbackMode()) {
             FeedbackManager.processDrawArrays(mode, first, count);
@@ -3325,7 +3899,9 @@ public class GLStateManager {
         return false;
     }
 
+    /** Updates ffp client array pointer state for GLStateManager. */
     private static void ffpClientArrayPointer(int conv, int size, int type, boolean normalized, int stride, long offset) {
+        rejectExitCapture();
         if (!isLegalClientArray(conv, size, type, stride)) return;
         final GLContextState glCtx = ctx();
         if (glCtx.vaos.setConventional(conv, size, type, normalized, stride, offset, glCtx.boundVBO)) {
@@ -3333,7 +3909,9 @@ public class GLStateManager {
         }
     }
 
+    /** Updates ffp client array pointer state for GLStateManager. */
     private static void ffpClientArrayPointer(int conv, int size, int type, boolean normalized, int stride, ByteBuffer pointer) {
+        rejectExitCapture();
         if (!isLegalClientArray(conv, size, type, stride)) return;
         ctx().vaos.setConventional(conv, size, type, normalized, stride, pointer);
     }
@@ -3393,7 +3971,9 @@ public class GLStateManager {
         };
     }
 
+    /** Handles glGetPointer through tracked GL state and the active render backend. */
     public static ByteBuffer glGetPointer(int pname, long result_size) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final int key = clientArrayField(glCtx, pname);
         if ((key & ~0xFF) != FIELD_POINTER) return null;
@@ -3585,11 +4165,15 @@ public class GLStateManager {
         ffpClientArrayPointer(texCoordConventional(ctx()), size, type, false, stride, pointer_buffer_offset);
     }
 
+    /** Handles glEnableClientState through tracked GL state and the active render backend. */
     public static void glEnableClientState(int cap) {
+        rejectExitCapture();
         setClientArrayCap(ctx(), cap, true);
     }
 
+    /** Handles glDisableClientState through tracked GL state and the active render backend. */
     public static void glDisableClientState(int cap) {
+        rejectExitCapture();
         setClientArrayCap(ctx(), cap, false);
     }
 
@@ -3647,7 +4231,9 @@ public class GLStateManager {
         RENDER_BACKEND.vertexAttrib4f(index, v0, v1, v2, v3);
     }
 
+    /** Handles glVertexAttribPointer through tracked GL state and the active render backend. */
     public static void glVertexAttribPointer(int index, int size, int type, boolean normalized, int stride, long offset) {
+        rejectExitCapture();
         if (!isLegalVertexAttrib(index, size, type, stride, false)) return;
         final GLContextState glCtx = ctx();
         if (glCtx.vaos.setAttribute(index, size, type, normalized, stride, offset, glCtx.boundVBO)) {
@@ -3675,12 +4261,16 @@ public class GLStateManager {
         glVertexAttribPointer(index, size, type, normalized, stride, MemoryUtilities.memByteBuffer(pointer));
     }
 
+    /** Handles glVertexAttribPointer through tracked GL state and the active render backend. */
     public static void glVertexAttribPointer(int index, int size, int type, boolean normalized, int stride, ByteBuffer pointer) {
+        rejectExitCapture();
         if (!isLegalVertexAttrib(index, size, type, stride, false)) return;
         ctx().vaos.setAttribute(index, size, type, normalized, stride, pointer);
     }
 
+    /** Handles glVertexAttribIPointer through tracked GL state and the active render backend. */
     public static void glVertexAttribIPointer(int index, int size, int type, int stride, long offset) {
+        rejectExitCapture();
         if (!isLegalVertexAttrib(index, size, type, stride, true)) return;
         final GLContextState glCtx = ctx();
         if (glCtx.vaos.setIntegerAttribute(index, size, type, stride, offset, glCtx.boundVBO)) {
@@ -3688,7 +4278,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glVertexAttribIPointer through tracked GL state and the active render backend. */
     public static void glVertexAttribIPointer(int index, int size, int type, int stride, ByteBuffer pointer) {
+        rejectExitCapture();
         if (!isLegalVertexAttrib(index, size, type, stride, true)) return;
         ctx().vaos.setIntegerAttribute(index, size, type, stride, pointer);
     }
@@ -3701,24 +4293,34 @@ public class GLStateManager {
         glVertexAttribIPointer(index, size, type, stride, MemoryUtilities.memByteBuffer(pointer));
     }
 
+    /** Handles glVertexAttribDivisor through tracked GL state and the active render backend. */
     public static void glVertexAttribDivisor(int index, int divisor) {
+        rejectExitCapture();
         if (ctx().vaos.setDivisor(index, divisor)) RENDER_BACKEND.vertexAttribDivisor(index, divisor);
     }
 
     public static void glVertexAttribDivisorARB(int index, int divisor) { glVertexAttribDivisor(index, divisor); }
-    public static void glBindVertexBuffer(int bindingindex, int buffer, long offset, int stride) { RENDER_BACKEND.bindVertexBuffer(bindingindex, buffer, offset, stride); }
-    public static void glVertexAttribFormat(int attribindex, int size, int type, boolean normalized, int relativeoffset) { RENDER_BACKEND.vertexAttribFormat(attribindex, size, type, normalized, relativeoffset); }
-    public static void glVertexAttribIFormat(int attribindex, int size, int type, int relativeoffset) { RENDER_BACKEND.vertexAttribIFormat(attribindex, size, type, relativeoffset); }
-    public static void glVertexAttribBinding(int attribindex, int bindingindex) { RENDER_BACKEND.vertexAttribBinding(attribindex, bindingindex); }
+    /** Handles glBindVertexBuffer through tracked GL state and the active render backend. */
+    public static void glBindVertexBuffer(int bindingindex, int buffer, long offset, int stride) { rejectExitCapture(); RENDER_BACKEND.bindVertexBuffer(bindingindex, buffer, offset, stride); }
+    /** Handles glVertexAttribFormat through tracked GL state and the active render backend. */
+    public static void glVertexAttribFormat(int attribindex, int size, int type, boolean normalized, int relativeoffset) { rejectExitCapture(); RENDER_BACKEND.vertexAttribFormat(attribindex, size, type, normalized, relativeoffset); }
+    /** Handles glVertexAttribIFormat through tracked GL state and the active render backend. */
+    public static void glVertexAttribIFormat(int attribindex, int size, int type, int relativeoffset) { rejectExitCapture(); RENDER_BACKEND.vertexAttribIFormat(attribindex, size, type, relativeoffset); }
+    /** Handles glVertexAttribBinding through tracked GL state and the active render backend. */
+    public static void glVertexAttribBinding(int attribindex, int bindingindex) { rejectExitCapture(); RENDER_BACKEND.vertexAttribBinding(attribindex, bindingindex); }
 
+    /** Handles glEnableVertexAttribArray through tracked GL state and the active render backend. */
     public static void glEnableVertexAttribArray(int index) {
+        rejectExitCapture();
         if (!isValidVertexAttribIndex(index, "glEnableVertexAttribArray")) return;
         final GLContextState glCtx = ctx();
         if (glCtx.vaos.enableAttribute(index)) repointAttrib(glCtx, index);
         RENDER_BACKEND.enableVertexAttribArray(index);
     }
 
+    /** Handles glDisableVertexAttribArray through tracked GL state and the active render backend. */
     public static void glDisableVertexAttribArray(int index) {
+        rejectExitCapture();
         if (!isValidVertexAttribIndex(index, "glDisableVertexAttribArray")) return;
         final GLContextState glCtx = ctx();
         if (glCtx.vaos.disableAttribute(index)) repointAttrib(glCtx, index);
@@ -3750,7 +4352,9 @@ public class GLStateManager {
     }
 
     static final int CLIENT_ATTRIB_STACK_DEPTH = 16;
+    /** Handles glPushClientAttrib through tracked GL state and the active render backend. */
     public static void glPushClientAttrib(int mask) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final int sp = glCtx.clientAttribStackPointer;
         if (sp < CLIENT_ATTRIB_STACK_DEPTH) {
@@ -3774,7 +4378,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glPopClientAttrib through tracked GL state and the active render backend. */
     public static void glPopClientAttrib() {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         if (glCtx.clientAttribStackPointer > 0) {
             final int sp = --glCtx.clientAttribStackPointer;
@@ -3829,7 +4435,9 @@ public class GLStateManager {
         }
     }
 
+    /** Updates interleaved arrays state for GLStateManager. */
     private static void interleavedArrays(int format, int stride, long pointer, ByteBuffer base) {
+        rejectExitCapture();
         // Mesa _mesa_get_interleaved_layout decomposition
         final int f = 4; // sizeof(float)
         final int c = f * ((4 + (f - 1)) / f); // 4 ubytes padded to float alignment = 4
@@ -3935,7 +4543,9 @@ public class GLStateManager {
         interleavedArrays(format, stride, 0L, MemoryUtilities.memByteBuffer(pointer));
     }
 
+    /** Handles glLogicOp through tracked GL state and the active render backend. */
     public static void glLogicOp(int opcode) {
+        rejectExitCapture();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
             DisplayListManager.recordLogicOp(opcode);
@@ -4080,7 +4690,9 @@ public class GLStateManager {
         glCtx.colorMaterial.disable();
     }
 
+    /** Updates bake current color into tracked material state for GLStateManager. */
     private static void bakeCurrentColorIntoTrackedMaterial(GLContextState glCtx) {
+        glCtx.exitCapture.requireMaterialBakeInputs();
         final float r = glCtx.color.getRed();
         final float g = glCtx.color.getGreen();
         final float b = glCtx.color.getBlue();
@@ -4088,10 +4700,10 @@ public class GLStateManager {
         final int face = glCtx.colorMaterialFace.getValue();
         final int param = glCtx.colorMaterialParameter.getValue();
         if (face == GL11.GL_FRONT || face == GL11.GL_FRONT_AND_BACK) {
-            bakeMaterialColor(glCtx.frontMaterial, param, r, g, b, a);
+            bakeMaterialColor(glCtx, glCtx.frontMaterial, param, r, g, b, a);
         }
         if (face == GL11.GL_BACK || face == GL11.GL_FRONT_AND_BACK) {
-            bakeMaterialColor(glCtx.backMaterial, param, r, g, b, a);
+            bakeMaterialColor(glCtx, glCtx.backMaterial, param, r, g, b, a);
         }
     }
 
@@ -4099,7 +4711,9 @@ public class GLStateManager {
         return vec.x != r || vec.y != g || vec.z != b || vec.w != a;
     }
 
-    private static void bakeMaterialColor(MaterialStateStack material, int param, float r, float g, float b, float a) {
+    /** Updates bake material color state for GLStateManager. */
+    private static void bakeMaterialColor(GLContextState glCtx, MaterialStateStack material, int param, float r, float g, float b, float a) {
+        glCtx.exitCapture.material(material.face, param);
         final boolean changed = switch (param) {
             case GL11.GL_AMBIENT_AND_DIFFUSE -> materialVectorDiffers(material.ambient, r, g, b, a) || materialVectorDiffers(material.diffuse, r, g, b, a);
             case GL11.GL_AMBIENT -> materialVectorDiffers(material.ambient, r, g, b, a);
@@ -4219,7 +4833,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glFog through tracked GL state and the active render backend. */
     public static void glFog(int pname, FloatBuffer param) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
@@ -4254,7 +4870,9 @@ public class GLStateManager {
         return ctx().fogState.getFogColor();
     }
 
+    /** Updates fog color state for GLStateManager. */
     public static void fogColor(float red, float green, float blue, float alpha) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final boolean caching = isCachingEnabled();
         if (!caching || red != glCtx.fogState.getFogColor().x || green != glCtx.fogState.getFogColor().y || blue != glCtx.fogState.getFogColor().z || alpha != glCtx.fogState.getFogAlpha()) {
@@ -4271,7 +4889,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glFogf through tracked GL state and the active render backend. */
     public static void glFogf(int pname, float param) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
@@ -4299,7 +4919,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glFogi through tracked GL state and the active render backend. */
     public static void glFogi(int pname, int param) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
@@ -4323,8 +4945,10 @@ public class GLStateManager {
         glFogf(GL11.GL_FOG_COLOR, 0.0F);
     }
 
+    /** Handles glShadeModel through tracked GL state and the active render backend. */
     public static void glShadeModel(int mode) {
         final GLContextState glCtx = ctx();
+        glCtx.exitCapture.write(ExitStateCapture.SHADE_MODEL);
         final RecordMode recordMode = DisplayListManager.getRecordMode();
         if (recordMode != RecordMode.NONE) {
             DisplayListManager.recordShadeModel(mode);
@@ -4354,6 +4978,7 @@ public class GLStateManager {
         clearTextureBindings(glCtx, id);
     }
 
+    /** Clears texture bindings for GLStateManager. */
     private static void clearTextureBindings(GLContextState glCtx, int id) {
         for (int i = 0; i <= glCtx.maxBoundTextureUnit; i++) {
             if (glCtx.textures.getTextureUnitBindings(i).getBinding() == id) {
@@ -4364,7 +4989,7 @@ public class GLStateManager {
         for (int i = 0; i <= glCtx.maxBoundImageUnit; i++) {
             final ImageUnitBinding image = glCtx.imageUnits.get(i);
             if (image != null && image.getTexture() == id) {
-                image.setBinding(0, 0, false, 0, 0, 0);
+                image.reset();
             }
         }
     }
@@ -4471,11 +5096,15 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glNewList through tracked GL state and the active render backend. */
     public static void glNewList(int list, int mode) {
+        rejectExitCapture();
         DisplayListManager.glNewList(list, mode);
     }
 
+    /** Handles glEndList through tracked GL state and the active render backend. */
     public static void glEndList() {
+        rejectExitCapture();
         DisplayListManager.glEndList();
     }
 
@@ -4492,11 +5121,15 @@ public class GLStateManager {
 
     private static final DisplayListIDAllocator displayListIdAllocator = new DisplayListIDAllocator();
 
+    /** Handles glGenLists through tracked GL state and the active render backend. */
     public static int glGenLists(int range) {
+        rejectExitCapture();
         return displayListIdAllocator.allocRange(range);
     }
 
+    /** Handles glIsList through tracked GL state and the active render backend. */
     public static boolean glIsList(int list) {
+        rejectExitCapture();
         return displayListIdAllocator.isAllocated(list);
     }
 
@@ -4504,6 +5137,7 @@ public class GLStateManager {
      * Delete display lists and free their VBO resources.
      */
     public static void glDeleteLists(int list, int range) {
+        rejectExitCapture();
         final boolean locked = acquireDrawLock();
         try {
             synchronized (displayListIdAllocator) {
@@ -4525,7 +5159,9 @@ public class GLStateManager {
         return DisplayListManager.getDisplayList(list);
     }
 
+    /** Handles glCallList through tracked GL state and the active render backend. */
     public static void glCallList(int list) {
+        rejectExitCapture();
         if (!GLDebug.isActive()) {
             DisplayListManager.glCallList(list);
             return;
@@ -4557,9 +5193,11 @@ public class GLStateManager {
         return pushStateLive(set);
     }
 
+    /** Returns the push state live result for GLStateManager. */
     static int pushStateLive(StateSet set) {
         attribPushes++;
         final GLContextState glCtx = ctx();
+        glCtx.exitCapture.pushAttrib();
         if (glCtx.attribDepth >= MAX_ATTRIB_STACK_DEPTH) {
             throw new IllegalStateException("Attrib stack overflow: max depth " + MAX_ATTRIB_STACK_DEPTH + " reached");
         }
@@ -4612,6 +5250,7 @@ public class GLStateManager {
         }
     }
 
+    /** Updates pop state state for GLStateManager. */
     public static void popState() {
         final GLContextState glCtx = ctx();
         if (glCtx.attribDepth > 0 && glCtx.savedBatchStateGen[glCtx.attribDepth - 1] != glCtx.batchStateGeneration) {
@@ -4619,6 +5258,7 @@ public class GLStateManager {
         }
         final int poppedDepth = glCtx.attribDepth;
         final StateSet set = glCtx.attribSets[poppedDepth - 1];
+        glCtx.exitCapture.popAttrib(set);
         final boolean inspectAlpha = GLSMHooks.ALPHA_STATE_CHANGE.hasListeners()
             && ((glCtx.alphaState.cowDepths().claimedAt(poppedDepth) && set.contains(glCtx.alphaState.stackId()))
                 || (glCtx.alphaTest.cowDepths().claimedAt(poppedDepth) && set.contains(glCtx.alphaTest.stackId())));
@@ -4721,7 +5361,9 @@ public class GLStateManager {
         out.programGen = programLifetimeGeneration;
     }
 
+    /** Applies retained state for GLStateManager. */
     public static void applyRetainedState(RetainedState in) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         if (glCtx.retainedOwner != in) return;
         final CowStateStack<?>[] stackById = glCtx.stackById;
@@ -4791,6 +5433,7 @@ public class GLStateManager {
 
     /** Restores tracked GL state and marks generic attributes for refresh. */
     public static void replayStateToBackend() {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         if (RENDER_BACKEND == null) return;
 
@@ -5035,7 +5678,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glClear through tracked GL state and the active render backend. */
     public static void glClear(int mask) {
+        rejectExitCapture();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
             DisplayListManager.recordClear(mask);
@@ -5078,6 +5723,7 @@ public class GLStateManager {
         pushState(mask);
     }
 
+    /** Handles glPopAttrib through tracked GL state and the active render backend. */
     public static void glPopAttrib() {
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
@@ -5087,6 +5733,7 @@ public class GLStateManager {
             }
         }
         if (ctx().attribDepth == 0) {
+            rejectExitCapture();
             warnOnce("popattrib-underflow", "glPopAttrib called with an empty attrib stack; ignoring");
             return;
         }
@@ -5101,6 +5748,8 @@ public class GLStateManager {
 
     // Matrix Operations
     public static void glMatrixMode(int mode) {
+        final GLContextState glCtx = ctx();
+        glCtx.exitCapture.write(ExitStateCapture.MATRIX_MODE);
         final RecordMode recordMode = DisplayListManager.getRecordMode();
         if (recordMode != RecordMode.NONE) {
             DisplayListManager.recordMatrixMode(mode);
@@ -5108,12 +5757,13 @@ public class GLStateManager {
                 return;
             }
         }
-        mod(ctx().matrixMode).setMode(mode);
+        mod(glCtx.matrixMode).setMode(mode);
     }
 
+    /** Handles glLoadMatrix through tracked GL state and the active render backend. */
     public static void glLoadMatrix(FloatBuffer m) {
         final GLContextState glCtx = ctx();
-        beforeMatrixChange(glCtx);
+        beforeMatrixChange(glCtx, true);
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
             final Matrix4f matrix = new Matrix4f().set(m);
@@ -5129,9 +5779,10 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glLoadMatrix through tracked GL state and the active render backend. */
     public static void glLoadMatrix(DoubleBuffer m) {
         final GLContextState glCtx = ctx();
-        beforeMatrixChange(glCtx);
+        beforeMatrixChange(glCtx, true);
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
             // Convert double buffer to float buffer for recording
@@ -5151,8 +5802,10 @@ public class GLStateManager {
         }
     }
 
+    /** Updates model view matrix for GLStateManager. */
     public static void setModelViewMatrix(Matrix4fc m) {
         final GLContextState glCtx = ctx();
+        glCtx.exitCapture.matrixChange(GL11.GL_MODELVIEW, 0, true);
         if (isCachingEnabled()) {
             glCtx.modelViewMatrix.set(m);
             glCtx.mvGeneration++;
@@ -5160,16 +5813,20 @@ public class GLStateManager {
         }
     }
 
+    /** Updates texture matrix for GLStateManager. */
     public static void setTextureMatrix(int unit, Matrix4fc m) {
+        final GLContextState glCtx = ctx();
+        glCtx.exitCapture.matrixChange(GL11.GL_TEXTURE, unit, true);
         if (unit != 0) beforeUncapturedStateChange();
         if (isCachingEnabled()) {
-            final GLContextState glCtx = ctx();
             glCtx.textures.getTextureUnitMatrix(unit).set(m);
             glCtx.texMatrixGeneration++;
         }
     }
 
+    /** Updates projection matrix for GLStateManager. */
     public static void setProjectionMatrix(Matrix4fc m) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         if (isCachingEnabled()) {
             glCtx.projectionMatrix.set(m);
@@ -5212,9 +5869,10 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glLoadIdentity through tracked GL state and the active render backend. */
     public static void glLoadIdentity() {
         final GLContextState glCtx = ctx();
-        beforeMatrixChange(glCtx);
+        beforeMatrixChange(glCtx, true);
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
             DisplayListManager.recordLoadIdentity();
@@ -5395,7 +6053,10 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glPushMatrix through tracked GL state and the active render backend. */
     public static void glPushMatrix() {
+        final GLContextState glCtx = ctx();
+        glCtx.exitCapture.pushMatrix();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
             DisplayListManager.recordPushMatrix();  // Handles flush + relativeTransform stack
@@ -5406,16 +6067,19 @@ public class GLStateManager {
         // Only track stack on main thread (splash thread has separate GL context)
         if (isCachingEnabled()) {
             try {
-                matrixStack(ctx()).pushMatrix();
+                matrixStack(glCtx).pushMatrix();
             } catch (IllegalStateException ignored) {
+                glCtx.exitCapture.reject();
                 if (initConfig != null && initConfig.isLwjglDebug()) LOGGER.warn("Matrix stack overflow ", new Throwable());
             }
         }
     }
 
+    /** Handles glPopMatrix through tracked GL state and the active render backend. */
     public static void glPopMatrix() {
         final GLContextState glCtx = ctx();
-        beforeMatrixChange(glCtx);
+        glCtx.exitCapture.popMatrix();
+        if (isUncapturedMatrix(glCtx)) beforeUncapturedStateChange();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
             DisplayListManager.recordPopMatrix();  // Handles flush + relativeTransform stack + lastRecordedTransform sync
@@ -5429,6 +6093,7 @@ public class GLStateManager {
                 matrixStack(glCtx).popMatrix();
                 bumpMatrixGeneration(glCtx);
             } catch (IllegalStateException ignored) {
+                glCtx.exitCapture.reject();
                 if (initConfig != null && initConfig.isLwjglDebug()) LOGGER.warn("Matrix stack underflow ", new Throwable());
             }
         }
@@ -5452,7 +6117,9 @@ public class GLStateManager {
         GLStateManager.glOrtho(left, right, bottom, top, -1.0, 1.0);
     }
 
+    /** Updates glu pick matrix state for GLStateManager. */
     public static void gluPickMatrix(float x, float y, float deltaX, float deltaY, IntBuffer viewport) {
+        rejectExitCapture();
         if (deltaX <= 0 || deltaY <= 0) return;
         GLStateManager.glTranslatef(
                 (viewport.get(viewport.position() + 2) - 2 * (x - viewport.get(viewport.position() + 0))) / deltaX,
@@ -5546,7 +6213,9 @@ public class GLStateManager {
         }
     }
 
+    /** Updates tex parameteri cache for GLStateManager. */
     public static boolean updateTexParameteriCache(int target, int texture, int pname, int param) {
+        rejectExitCapture();
         if (target != GL11.GL_TEXTURE_2D) {
             return true;
         }
@@ -5594,7 +6263,9 @@ public class GLStateManager {
         return true;
     }
 
+    /** Handles glTexParameter through tracked GL state and the active render backend. */
     public static void glTexParameter(int target, int pname, IntBuffer params) {
+        rejectExitCapture();
         if (handleRemovedTexParam(target, pname, params.remaining() >= 1 ? params.get(params.position()) : 0)) return;
         if (params.remaining() >= 1) {
             final int val = params.get(params.position());
@@ -5607,7 +6278,9 @@ public class GLStateManager {
         RENDER_BACKEND.texParameteriv(target, pname, params);
     }
 
+    /** Handles glTexParameter through tracked GL state and the active render backend. */
     public static void glTexParameter(int target, int pname, FloatBuffer params) {
+        rejectExitCapture();
         if (handleRemovedTexParam(target, pname, params.remaining() >= 1 ? (int) params.get(params.position()) : 0)) return;
         if (params.remaining() >= 1) {
             final float val = params.get(params.position());
@@ -5620,7 +6293,9 @@ public class GLStateManager {
         RENDER_BACKEND.texParameterfv(target, pname, params);
     }
 
+    /** Handles glTexParameteri through tracked GL state and the active render backend. */
     public static void glTexParameteri(int target, int pname, int param) {
+        rejectExitCapture();
         if (handleRemovedTexParam(target, pname, param)) return;
         param = remapTexClamp(pname, param);
         final RecordMode mode = DisplayListManager.getRecordMode();
@@ -5640,18 +6315,24 @@ public class GLStateManager {
         RENDER_BACKEND.texParameteri(target, pname, param);
     }
 
+    /** Updates tex parameterf cache for GLStateManager. */
     public static boolean updateTexParameterfCache(int target, int texture, int pname, float param) {
+        rejectExitCapture();
         if (target != GL11.GL_TEXTURE_2D) {
             return true;
         }
         return updateTexParameterfCache(TextureInfoCache.INSTANCE.getInfo(texture), pname, param);
     }
 
+    /** Updates tex parameterf cache for GLStateManager. */
     static boolean updateTexParameterfCache(TextureInfo info, int pname, float param) {
         if (info == null) {
             return true;
         }
         switch (pname) {
+            case GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_TEXTURE_WRAP_S, GL11.GL_TEXTURE_WRAP_T -> {
+                return updateTexParameteriCache(info, pname, (int) param);
+            }
             case EXTTextureFilterAnisotropic.GL_TEXTURE_MAX_ANISOTROPY_EXT -> {
                 if (info.getMaxAnisotropy() == param && isCachingEnabled()) return false;
                 info.setMaxAnisotropy(param);
@@ -5664,7 +6345,9 @@ public class GLStateManager {
         return true;
     }
 
+    /** Handles glTexParameterf through tracked GL state and the active render backend. */
     public static void glTexParameterf(int target, int pname, float param) {
+        rejectExitCapture();
         if (handleRemovedTexParam(target, pname, param > 0 ? (int) (param + 0.5f) : (int) (param - 0.5f))) return;
         param = remapTexClamp(pname, param);
         final RecordMode mode = DisplayListManager.getRecordMode();
@@ -5716,7 +6399,9 @@ public class GLStateManager {
         };
     }
 
+    /** Handles glGetTexParameteri through tracked GL state and the active render backend. */
     public static int glGetTexParameteri(int target, int pname) {
+        rejectExitCapture();
         if (target != GL11.GL_TEXTURE_2D || !isCachingEnabled()) {
             return RENDER_BACKEND.getTexParameteri(target, pname);
         }
@@ -5724,7 +6409,9 @@ public class GLStateManager {
         return v != TEX_PARAM_MISS ? (int) v : RENDER_BACKEND.getTexParameteri(target, pname);
     }
 
+    /** Handles glGetTexParameterf through tracked GL state and the active render backend. */
     public static float glGetTexParameterf(int target, int pname) {
+        rejectExitCapture();
         if (target != GL11.GL_TEXTURE_2D || !isCachingEnabled()) {
             return RENDER_BACKEND.getTexParameterf(target, pname);
         }
@@ -5757,7 +6444,9 @@ public class GLStateManager {
         return Math.max(base >> level, 1);
     }
 
+    /** Handles glGetTexLevelParameteri through tracked GL state and the active render backend. */
     public static int glGetTexLevelParameteri(int target, int level, int pname) {
+        rejectExitCapture();
         if (target != GL11.GL_TEXTURE_2D || !isCachingEnabled()) {
             return RENDER_BACKEND.getTexLevelParameteri(target, level, pname);
         }
@@ -5790,7 +6479,9 @@ public class GLStateManager {
         };
     }
 
+    /** Handles glGetTexImage through tracked GL state and the active render backend. */
     public static void glGetTexImage(int target, int level, int format, int type, ByteBuffer pixels) {
+        rejectExitCapture();
         if (RenderSystem.isGLES()) {
             getTexImageViaFboReadPixels(target, level, format, type, pixels);
             return;
@@ -5799,7 +6490,9 @@ public class GLStateManager {
         RENDER_BACKEND.getTexImage(target, level, format, type, pixels);
         restorePixelPackBuffer();
     }
+    /** Handles glGetTexImage through tracked GL state and the active render backend. */
     public static void glGetTexImage(int target, int level, int format, int type, IntBuffer pixels) {
+        rejectExitCapture();
         if (RenderSystem.isGLES()) {
             getTexImageViaFboReadPixels(target, level, format, type, pixels);
             return;
@@ -5869,37 +6562,42 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glReadPixels through tracked GL state and the active render backend. */
     public static void glReadPixels(int x, int y, int width, int height, int format, int type, ByteBuffer pixels) {
+        rejectExitCapture();
         type = remapPixelTypeForGLES(format, type);
         suspendPixelPackBuffer();
         RENDER_BACKEND.readPixels(x, y, width, height, format, type, pixels);
         restorePixelPackBuffer();
     }
+    /** Handles glReadPixels through tracked GL state and the active render backend. */
     public static void glReadPixels(int x, int y, int width, int height, int format, int type, FloatBuffer pixels) {
+        rejectExitCapture();
         type = remapPixelTypeForGLES(format, type);
         suspendPixelPackBuffer();
         RENDER_BACKEND.readPixels(x, y, width, height, format, type, pixels);
         restorePixelPackBuffer();
     }
+    /** Handles glReadPixels through tracked GL state and the active render backend. */
     public static void glReadPixels(int x, int y, int width, int height, int format, int type, IntBuffer pixels) {
+        rejectExitCapture();
         type = remapPixelTypeForGLES(format, type);
         suspendPixelPackBuffer();
         RENDER_BACKEND.readPixels(x, y, width, height, format, type, pixels);
         restorePixelPackBuffer();
     }
+    /** Handles glTexStorage2D through tracked GL state and the active render backend. */
     public static void glTexStorage2D(int target, int levels, int internalFormat, int width, int height) {
+        rejectExitCapture();
         RENDER_BACKEND.texStorage2D(target, levels, internalFormat, width, height);
-        if (target == GL11.GL_TEXTURE_2D) {
-            final boolean locked = acquireDrawLock();
-            try {
-                unshrinkableTextures.add(getBoundTextureForServerState());
-            } finally {
-                if (locked) releaseDrawLock();
-            }
-        }
         TextureInfoCache.INSTANCE.onTexStorage2D(target, internalFormat, width, height);
     }
-    public static void glClearTexImage(int texture, int level, int format, int type, ByteBuffer data) { RENDER_BACKEND.clearTexImage(texture, level, format, type); }
+    /** Handles glClearTexImage through tracked GL state and the active render backend. */
+    public static void glClearTexImage(int texture, int level, int format, int type, ByteBuffer data) {
+        rejectExitCapture();
+        RENDER_BACKEND.clearTexImage(texture, level, format, type);
+        if (level == 0) TextureInfoCache.INSTANCE.onContentsChanged(texture);
+    }
 
     public static int glGenSamplers() {
         requireContext("glGenSamplers");
@@ -5916,7 +6614,9 @@ public class GLStateManager {
         for (int i = 0; i < samplers.length; i++) samplers[i] = RENDER_BACKEND.genSamplers();
     }
 
+    /** Handles glDeleteSamplers through tracked GL state and the active render backend. */
     public static void glDeleteSamplers(int sampler) {
+        rejectExitCapture();
         if (sampler == 0) return;
         ctx().samplerUnits.unbindEverywhere(sampler);
         RENDER_BACKEND.deleteSamplers(sampler);
@@ -5930,7 +6630,9 @@ public class GLStateManager {
         for (int sampler : samplers) glDeleteSamplers(sampler);
     }
 
+    /** Handles glBindSampler through tracked GL state and the active render backend. */
     public static void glBindSampler(int unit, int sampler) {
+        rejectExitCapture();
         final SamplerUnitArray units = ctx().samplerUnits;
         if (isCachingEnabled() && unit >= 0 && unit < units.size() && units.get(unit) == sampler) return;
         beforeUncapturedStateChange();
@@ -5940,16 +6642,20 @@ public class GLStateManager {
         RENDER_BACKEND.bindSampler(unit, sampler);
     }
 
+    /** Handles glBindSamplers through tracked GL state and the active render backend. */
     public static void glBindSamplers(int first, int count, IntBuffer samplers) {
         if (samplers == null) {
             for (int i = 0; i < count; i++) glBindSampler(first + i, 0);
             return;
         }
-        if (samplers.remaining() < count) {
-            throw new IllegalArgumentException("Number of remaining buffer elements is " + samplers.remaining() + ", must be at least " + count);
-        }
+        requireRemaining(samplers, count);
         final int base = samplers.position();
         for (int i = 0; i < count; i++) glBindSampler(first + i, samplers.get(base + i));
+    }
+
+    /** Validates remaining for GLStateManager. */
+    private static void requireRemaining(IntBuffer buffer, int count) {
+        if (buffer.remaining() < count) throw new IllegalArgumentException("Number of remaining buffer elements is " + buffer.remaining() + ", must be at least " + count);
     }
 
     public static void glBindSamplers(int first, IntBuffer samplers) {
@@ -5963,8 +6669,10 @@ public class GLStateManager {
 
     public static int getSamplerBinding(int unit) { return ctx().samplerUnits.get(unit); }
     public static int getSamplerUnitCount() { return ctx().samplerUnits.size(); }
-    public static void glSamplerParameteri(int sampler, int pname, int param) { RENDER_BACKEND.samplerParameteri(sampler, pname, param); }
-    public static void glSamplerParameterf(int sampler, int pname, float param) { RENDER_BACKEND.samplerParameterf(sampler, pname, param); }
+    /** Handles glSamplerParameteri through tracked GL state and the active render backend. */
+    public static void glSamplerParameteri(int sampler, int pname, int param) { rejectExitCapture(); RENDER_BACKEND.samplerParameteri(sampler, pname, param); }
+    /** Handles glSamplerParameterf through tracked GL state and the active render backend. */
+    public static void glSamplerParameterf(int sampler, int pname, float param) { rejectExitCapture(); RENDER_BACKEND.samplerParameterf(sampler, pname, param); }
 
     private static boolean glMaterialFront(int pname, FloatBuffer params) {
         final GLContextState glCtx = ctx();
@@ -6042,7 +6750,10 @@ public class GLStateManager {
         };
     }
 
+    /** Handles glMaterial through tracked GL state and the active render backend. */
     public static void glMaterial(int face, int pname, FloatBuffer params) {
+        final GLContextState glCtx = ctx();
+        glCtx.exitCapture.material(face, pname);
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
             DisplayListManager.recordMaterial(face, pname, params);
@@ -6062,10 +6773,13 @@ public class GLStateManager {
         } else {
             throw new RuntimeException("Unsupported face value for glMaterial: " + face);
         }
-        if (changed) ctx().lightingGeneration++;
+        if (changed) glCtx.lightingGeneration++;
     }
 
+    /** Handles glMaterial through tracked GL state and the active render backend. */
     public static void glMaterial(int face, int pname, IntBuffer params) {
+        final GLContextState glCtx = ctx();
+        glCtx.exitCapture.material(face, pname);
         // For IntBuffer version, we need to convert to float for recording
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
@@ -6093,10 +6807,12 @@ public class GLStateManager {
         } else {
             throw new RuntimeException("Unsupported face value for glMaterial: " + face);
         }
-        if (changed) ctx().lightingGeneration++;
+        if (changed) glCtx.lightingGeneration++;
     }
 
+    /** Handles glMaterialf through tracked GL state and the active render backend. */
     public static void glMaterialf(int face, int pname, float val) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
@@ -6135,7 +6851,9 @@ public class GLStateManager {
         glMaterialf(face, pname, (float) val);
     }
 
+    /** Handles glLight through tracked GL state and the active render backend. */
     public static void glLight(int light, int pname, FloatBuffer params) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
@@ -6162,7 +6880,9 @@ public class GLStateManager {
         if (changed) glCtx.lightingGeneration++;
     }
 
+    /** Handles glLight through tracked GL state and the active render backend. */
     public static void glLight(int light, int pname, IntBuffer params) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         // For IntBuffer version, we need to convert to float for recording
         final RecordMode mode = DisplayListManager.getRecordMode();
@@ -6197,7 +6917,9 @@ public class GLStateManager {
         if (changed) glCtx.lightingGeneration++;
     }
 
+    /** Handles glLightf through tracked GL state and the active render backend. */
     public static void glLightf(int light, int pname, float param) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
@@ -6219,7 +6941,9 @@ public class GLStateManager {
         if (changed) glCtx.lightingGeneration++;
     }
 
+    /** Handles glLighti through tracked GL state and the active render backend. */
     public static void glLighti(int light, int pname, int param) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
@@ -6241,7 +6965,9 @@ public class GLStateManager {
         if (changed) glCtx.lightingGeneration++;
     }
 
+    /** Handles glLightModel through tracked GL state and the active render backend. */
     public static void glLightModel(int pname, FloatBuffer params) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
@@ -6260,7 +6986,9 @@ public class GLStateManager {
         if (changed) glCtx.lightingGeneration++;
     }
 
+    /** Handles glLightModel through tracked GL state and the active render backend. */
     public static void glLightModel(int pname, IntBuffer params) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         // For IntBuffer version, we need to convert to float for recording
         final RecordMode mode = DisplayListManager.getRecordMode();
@@ -6288,7 +7016,9 @@ public class GLStateManager {
         if (changed) glCtx.lightingGeneration++;
     }
 
+    /** Handles glLightModelf through tracked GL state and the active render backend. */
     public static void glLightModelf(int pname, float param) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
@@ -6309,7 +7039,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glLightModeli through tracked GL state and the active render backend. */
     public static void glLightModeli(int pname, int param) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
@@ -6331,8 +7063,10 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glColorMaterial through tracked GL state and the active render backend. */
     public static void glColorMaterial(int face, int mode) {
         final GLContextState glCtx = ctx();
+        glCtx.exitCapture.write(ExitStateCapture.COLOR_MATERIAL_SETTINGS);
         final RecordMode recordMode = DisplayListManager.getRecordMode();
         if (recordMode != RecordMode.NONE) {
             DisplayListManager.recordColorMaterial(face, mode);
@@ -6348,14 +7082,18 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glDepthRange through tracked GL state and the active render backend. */
     public static void glDepthRange(double near, double far) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         if (!isCachingEnabled() || glCtx.viewportState.depthRangeNear != near || glCtx.viewportState.depthRangeFar != far) beforeUncapturedStateChange();
         if (isCachingEnabled()) mod(glCtx.viewportState).setDepthRange(near, far);
         RENDER_BACKEND.depthRange(near, far);
     }
 
+    /** Handles glUseProgram through tracked GL state and the active render backend. */
     public static void glUseProgram(int program) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
@@ -6424,6 +7162,7 @@ public class GLStateManager {
 
     // Missing GL commands from Mesa cross-check
     public static void glTexImage1D(int target, int level, int internalformat, int width, int border, int format, int type, ByteBuffer pixels) {
+        rejectExitCapture();
         internalformat = changeFormatIfDeprecated(internalformat);
         type = remapPixelTypeForGLES(format, type);
         type = remapTypeForRemappedInternalFormat(internalformat, type);
@@ -6435,7 +7174,9 @@ public class GLStateManager {
         restorePixelUnpackBuffer();
     }
 
+    /** Handles glTexImage3D through tracked GL state and the active render backend. */
     public static void glTexImage3D(int target, int level, int internalformat, int width, int height, int depth, int border, int format, int type, ByteBuffer pixels) {
+        rejectExitCapture();
         internalformat = changeFormatIfDeprecated(internalformat);
         type = remapPixelTypeForGLES(format, type);
         type = remapTypeForRemappedInternalFormat(internalformat, type);
@@ -6447,7 +7188,9 @@ public class GLStateManager {
         restorePixelUnpackBuffer();
     }
 
+    /** Handles glTexImage3D through tracked GL state and the active render backend. */
     public static void glTexImage3D(int target, int level, int internalformat, int width, int height, int depth, int border, int format, int type, IntBuffer pixels) {
+        rejectExitCapture();
         internalformat = changeFormatIfDeprecated(internalformat);
         type = remapPixelTypeForGLES(format, type);
         type = remapTypeForRemappedInternalFormat(internalformat, type);
@@ -6459,7 +7202,9 @@ public class GLStateManager {
         restorePixelUnpackBuffer();
     }
 
+    /** Handles glTexSubImage1D through tracked GL state and the active render backend. */
     public static void glTexSubImage1D(int target, int level, int xoffset, int width, int format, int type, ByteBuffer pixels) {
+        rejectExitCapture();
         if (DisplayListManager.isRecording()) {
             throw DisplayListManager.unsupportedInList("glTexSubImage1D");
         }
@@ -6468,7 +7213,9 @@ public class GLStateManager {
         restorePixelUnpackBuffer();
     }
 
+    /** Handles glLineWidth through tracked GL state and the active render backend. */
     public static void glLineWidth(float width) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
@@ -6541,11 +7288,15 @@ public class GLStateManager {
         RENDER_BACKEND.provokingVertex(active ? GL32.GL_FIRST_VERTEX_CONVENTION : GL32.GL_LAST_VERTEX_CONVENTION);
     }
 
+    /** Handles glFlush through tracked GL state and the active render backend. */
     public static void glFlush() {
+        rejectExitCapture();
         RENDER_BACKEND.flush();
     }
 
+    /** Handles glFinish through tracked GL state and the active render backend. */
     public static void glFinish() {
+        rejectExitCapture();
         RENDER_BACKEND.finish();
     }
 
@@ -6589,7 +7340,9 @@ public class GLStateManager {
         RENDER_BACKEND.pumpDisplayMessages();
     }
 
+    /** Handles glGetError through tracked GL state and the active render backend. */
     public static int glGetError() {
+        rejectExitCapture();
         if (!RENDER_BACKEND.hasContext()) return 0;
         if (initConfig.isNoErrorChecks()) return 0;
         return RENDER_BACKEND.getError();
@@ -6600,17 +7353,23 @@ public class GLStateManager {
         if (error != GL11.GL_NO_ERROR) GLErrorReporter.reportError(error);
     }
 
+    /** Handles glGetString through tracked GL state and the active render backend. */
     public static String glGetString(int pname) {
+        rejectExitCapture();
         if (!RENDER_BACKEND.hasContext()) return "no valid GL/render context";
         return RENDER_BACKEND.getString(pname);
     }
 
+    /** Handles glGetStringi through tracked GL state and the active render backend. */
     public static String glGetStringi(int name, int index) {
+        rejectExitCapture();
         if (!RENDER_BACKEND.hasContext()) return "no valid GL/render context";
         return RENDER_BACKEND.getStringi(name, index);
     }
 
+    /** Handles glShaderSource through tracked GL state and the active render backend. */
     public static void glShaderSource(int shader, CharSequence source) {
+        rejectExitCapture();
         String src = source.toString();
         // Always rename reserved words for the target GLSL version (e.g. 'sampler' at 460)
         src = GlslTransformUtils.renameReservedWords(src, RENDER_BACKEND.getMinGLSLVersion());
@@ -6621,7 +7380,9 @@ public class GLStateManager {
         RENDER_BACKEND.shaderSource(shader, src);
     }
 
+    /** Handles nglShaderSource through tracked GL state and the active render backend. */
     public static void nglShaderSource(int shader, int count, long strings, long lengths) {
+        rejectExitCapture();
         if (count <= 0) return;
         final CharSequence source;
         if (count == 1) {
@@ -6663,6 +7424,7 @@ public class GLStateManager {
 
     // Texture commands
     public static void glTexSubImage2D(int target, int level, int xoffset, int yoffset, int width, int height, int format, int type, ByteBuffer pixels) {
+        rejectExitCapture();
         type = remapPixelTypeForGLES(format, type);
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
@@ -6678,7 +7440,9 @@ public class GLStateManager {
         maybeGenerateMipmap(target, level);
     }
 
+    /** Handles glTexSubImage2D through tracked GL state and the active render backend. */
     public static void glTexSubImage2D(int target, int level, int xoffset, int yoffset, int width, int height, int format, int type, IntBuffer pixels) {
+        rejectExitCapture();
         type = remapPixelTypeForGLES(format, type);
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
@@ -6694,7 +7458,9 @@ public class GLStateManager {
         maybeGenerateMipmap(target, level);
     }
 
+    /** Handles glTexSubImage2D through tracked GL state and the active render backend. */
     public static void glTexSubImage2D(int target, int level, int xoffset, int yoffset, int width, int height, int format, int type, long pixels_buffer_offset) {
+        rejectExitCapture();
         type = remapPixelTypeForGLES(format, type);
         if (DisplayListManager.isRecording()) {
             throw DisplayListManager.unsupportedInList("glTexSubImage2D with buffer offset");
@@ -6740,7 +7506,9 @@ public class GLStateManager {
         RENDER_BACKEND.trimTextureStaging();
     }
 
+    /** Handles glTexSubImage3D through tracked GL state and the active render backend. */
     public static void glTexSubImage3D(int target, int level, int xoffset, int yoffset, int zoffset, int width, int height, int depth, int format, int type, ByteBuffer pixels) {
+        rejectExitCapture();
         if (DisplayListManager.isRecording()) {
             throw DisplayListManager.unsupportedInList("glTexSubImage3D");
         }
@@ -6749,30 +7517,39 @@ public class GLStateManager {
         restorePixelUnpackBuffer();
     }
 
+    /** Handles glCopyTexImage1D through tracked GL state and the active render backend. */
     public static void glCopyTexImage1D(int target, int level, int internalFormat, int x, int y, int width, int border) {
+        rejectExitCapture();
         if (DisplayListManager.isRecording()) {
             throw DisplayListManager.unsupportedInList("glCopyTexImage1D");
         }
         RENDER_BACKEND.copyTexImage1D(target, level, internalFormat, x, y, width, border);
     }
 
+    /** Handles glCopyTexImage2D through tracked GL state and the active render backend. */
     public static void glCopyTexImage2D(int target, int level, int internalFormat, int x, int y, int width, int height, int border) {
+        rejectExitCapture();
         internalFormat = changeFormatIfDeprecated(internalFormat);
         if (DisplayListManager.isRecording()) {
             throw DisplayListManager.unsupportedInList("glCopyTexImage2D");
         }
         RENDER_BACKEND.copyTexImage2D(target, level, internalFormat, x, y, width, height, border);
+        TextureInfoCache.INSTANCE.onCopyTexImage2D(target, level, internalFormat, width, height);
         maybeGenerateMipmap(target, level);
     }
 
+    /** Handles glCopyTexSubImage1D through tracked GL state and the active render backend. */
     public static void glCopyTexSubImage1D(int target, int level, int xoffset, int x, int y, int width) {
+        rejectExitCapture();
         if (DisplayListManager.isRecording()) {
             throw DisplayListManager.unsupportedInList("glCopyTexSubImage1D");
         }
         RENDER_BACKEND.copyTexSubImage1D(target, level, xoffset, x, y, width);
     }
 
+    /** Handles glCopyTexSubImage2D through tracked GL state and the active render backend. */
     public static void glCopyTexSubImage2D(int target, int level, int xoffset, int yoffset, int x, int y, int width, int height) {
+        rejectExitCapture();
         if (DisplayListManager.isRecording()) {
             throw DisplayListManager.unsupportedInList("glCopyTexSubImage2D");
         }
@@ -6781,7 +7558,9 @@ public class GLStateManager {
         maybeGenerateMipmap(target, level);
     }
 
+    /** Handles glCopyTexSubImage3D through tracked GL state and the active render backend. */
     public static void glCopyTexSubImage3D(int target, int level, int xoffset, int yoffset, int zoffset, int x, int y, int width, int height) {
+        rejectExitCapture();
         if (DisplayListManager.isRecording()) {
             throw DisplayListManager.unsupportedInList("glCopyTexSubImage3D");
         }
@@ -6791,6 +7570,7 @@ public class GLStateManager {
     // State commands
     public static void glCullFace(int mode) {
         final GLContextState glCtx = ctx();
+        glCtx.exitCapture.write(ExitStateCapture.CULL_FACE);
         final RecordMode recordMode = DisplayListManager.getRecordMode();
         if (recordMode != RecordMode.NONE) {
             DisplayListManager.recordCullFace(mode);
@@ -6805,8 +7585,10 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glFrontFace through tracked GL state and the active render backend. */
     public static void glFrontFace(int mode) {
         final GLContextState glCtx = ctx();
+        glCtx.exitCapture.write(ExitStateCapture.FRONT_FACE);
         final RecordMode recordMode = DisplayListManager.getRecordMode();
         if (recordMode != RecordMode.NONE) {
             DisplayListManager.recordFrontFace(mode);
@@ -6821,7 +7603,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glHint through tracked GL state and the active render backend. */
     public static void glHint(int target, int hint) {
+        rejectExitCapture();
         if (hint != GL11.GL_NICEST && hint != GL11.GL_FASTEST && hint != GL11.GL_DONT_CARE) {
             return;
         }
@@ -6844,7 +7628,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glLineStipple through tracked GL state and the active render backend. */
     public static void glLineStipple(int factor, short pattern) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
@@ -6858,7 +7644,9 @@ public class GLStateManager {
         glCtx.lineState.setStipplePattern(pattern);
     }
 
+    /** Handles glPointSize through tracked GL state and the active render backend. */
     public static void glPointSize(float size) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
@@ -6874,7 +7662,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glPolygonMode through tracked GL state and the active render backend. */
     public static void glPolygonMode(int face, int polygonMode) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
@@ -6900,8 +7690,10 @@ public class GLStateManager {
         RENDER_BACKEND.polygonMode(GL11.GL_FRONT_AND_BACK, polygonMode);
     }
 
+    /** Handles glPolygonOffset through tracked GL state and the active render backend. */
     public static void glPolygonOffset(float factor, float units) {
         final GLContextState glCtx = ctx();
+        glCtx.exitCapture.write(ExitStateCapture.OFFSET_VALUES);
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
             DisplayListManager.recordPolygonOffset(factor, units);
@@ -6920,6 +7712,7 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glPolygonOffsetClamp through tracked GL state and the active render backend. */
     public static void glPolygonOffsetClamp(float factor, float units, float clamp) {
         if (clamp == 0.0f) {
             glPolygonOffset(factor, units);
@@ -6929,6 +7722,7 @@ public class GLStateManager {
             throw DisplayListManager.unsupportedInList("glPolygonOffsetClamp");
         }
         final GLContextState glCtx = ctx();
+        glCtx.exitCapture.write(ExitStateCapture.OFFSET_VALUES);
         final boolean caching = isCachingEnabled();
         if (!caching || glCtx.polygonState.getOffsetFactor() != factor || glCtx.polygonState.getOffsetUnits() != units || glCtx.polygonState.getOffsetClamp() != clamp) {
             mod(glCtx.polygonState);
@@ -6939,19 +7733,27 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glMultiDrawArraysIndirectCount through tracked GL state and the active render backend. */
     public static void glMultiDrawArraysIndirectCount(int mode, long indirect, long drawcount, int maxdrawcount, int stride) {
+        rejectExitCapture();
         RENDER_BACKEND.multiDrawArraysIndirectCount(mode, indirect, drawcount, maxdrawcount, stride);
     }
 
+    /** Handles glMultiDrawElementsIndirectCount through tracked GL state and the active render backend. */
     public static void glMultiDrawElementsIndirectCount(int mode, int type, long indirect, long drawcount, int maxdrawcount, int stride) {
+        rejectExitCapture();
         RENDER_BACKEND.multiDrawElementsIndirectCount(mode, type, indirect, drawcount, maxdrawcount, stride);
     }
 
+    /** Handles glSpecializeShader through tracked GL state and the active render backend. */
     public static void glSpecializeShader(int shader, CharSequence entryPoint, IntBuffer constantIndex, IntBuffer constantValue) {
+        rejectExitCapture();
         RENDER_BACKEND.specializeShader(shader, entryPoint, constantIndex, constantValue);
     }
 
+    /** Handles glReadBuffer through tracked GL state and the active render backend. */
     public static void glReadBuffer(int mode) {
+        rejectExitCapture();
         if (DisplayListManager.isRecording()) {
             throw DisplayListManager.unsupportedInList("glReadBuffer");
         }
@@ -6973,7 +7775,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glStencilFunc through tracked GL state and the active render backend. */
     public static void glStencilFunc(int func, int ref, int mask) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
@@ -6991,7 +7795,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glStencilMask through tracked GL state and the active render backend. */
     public static void glStencilMask(int mask) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
@@ -7009,7 +7815,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glStencilOp through tracked GL state and the active render backend. */
     public static void glStencilOp(int fail, int zfail, int zpass) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
@@ -7028,6 +7836,7 @@ public class GLStateManager {
 
     // glPixelStore* isn'tcompiled into display lists, it executes immediately
     public static void glPixelStorei(int pname, int param) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         if (isCachingEnabled()) {
             if (PixelStoreState.isPack(pname)) {
@@ -7065,12 +7874,15 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glListBase through tracked GL state and the active render backend. */
     public static void glListBase(int base) {
+        rejectExitCapture();
         ctx().listBase = base;
     }
 
     // Clip Plane Commands
     public static void glClipPlane(int plane, DoubleBuffer equation) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         if (DisplayListManager.isRecording()) {
             final int pos = equation.position();
@@ -7096,6 +7908,7 @@ public class GLStateManager {
 
     // Clear Commands
     public static void glClearStencil(int s) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final RecordMode mode = DisplayListManager.getRecordMode();
         if (mode != RecordMode.NONE) {
@@ -7252,22 +8065,32 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glDeleteBuffers through tracked GL state and the active render backend. */
     public static void glDeleteBuffers(int buffer) {
+        rejectExitCapture();
         if (buffer == 0) return;
         invalidateDeletedBuffer(buffer);
         RENDER_BACKEND.deleteBuffers(buffer);
     }
 
+    /** Handles glDeleteSync through tracked GL state and the active render backend. */
     public static void glDeleteSync(long sync) {
+        rejectExitCapture();
         RENDER_BACKEND.deleteSync(sync);
     }
 
-    public static long glFenceSync(int condition, int flags) { return RENDER_BACKEND.fenceSync(condition, flags); }
-    public static int glClientWaitSync(long sync, int flags, long timeout) { return RENDER_BACKEND.clientWaitSync(sync, flags, timeout); }
-    public static void glWaitSync(long sync, int flags, long timeout) { RENDER_BACKEND.waitSync(sync, flags, timeout); }
-    public static int glGetSynci(long sync, int pname, IntBuffer length) { return RENDER_BACKEND.getSynci(sync, pname, length); }
+    /** Handles glFenceSync through tracked GL state and the active render backend. */
+    public static long glFenceSync(int condition, int flags) { rejectExitCapture(); return RENDER_BACKEND.fenceSync(condition, flags); }
+    /** Handles glClientWaitSync through tracked GL state and the active render backend. */
+    public static int glClientWaitSync(long sync, int flags, long timeout) { rejectExitCapture(); return RENDER_BACKEND.clientWaitSync(sync, flags, timeout); }
+    /** Handles glWaitSync through tracked GL state and the active render backend. */
+    public static void glWaitSync(long sync, int flags, long timeout) { rejectExitCapture(); RENDER_BACKEND.waitSync(sync, flags, timeout); }
+    /** Handles glGetSynci through tracked GL state and the active render backend. */
+    public static int glGetSynci(long sync, int pname, IntBuffer length) { rejectExitCapture(); return RENDER_BACKEND.getSynci(sync, pname, length); }
 
+    /** Handles glDeleteBuffers through tracked GL state and the active render backend. */
     public static void glDeleteBuffers(IntBuffer buffers) {
+        rejectExitCapture();
         for (int i = buffers.position(); i < buffers.limit(); i++) {
             invalidateDeletedBuffer(buffers.get(i));
         }
@@ -7330,7 +8153,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glBindBuffer through tracked GL state and the active render backend. */
     public static void glBindBuffer(int target, int buffer) {
+        rejectExitCapture();
         final boolean locked = acquireDrawLock();
         try {
             trackBufferBinding(ctx(), target, buffer);
@@ -7430,13 +8255,17 @@ public class GLStateManager {
         return glCtx.boundOtherBuffers.get(target);
     }
 
+    /** Updates on buffer respec state for GLStateManager. */
     private static void onBufferRespec(int target) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final int buffer = bufferForTarget(glCtx, target);
         if (buffer != 0) onNamedBufferRespec(glCtx, buffer);
     }
 
+    /** Updates on named buffer respec state for GLStateManager. */
     private static void onNamedBufferRespec(GLContextState glCtx, int buffer) {
+        rejectExitCapture();
         final boolean locked = acquireDrawLock();
         try {
             if (!FfpExtendedAttribs.isEmpty()) FfpExtendedAttribs.onBufferRespecified(glCtx, buffer);
@@ -7484,7 +8313,9 @@ public class GLStateManager {
         }
     }
 
+    /** Updates on buffer storage state for GLStateManager. */
     private static void onBufferStorage(int target, int flags) {
+        rejectExitCapture();
         if ((flags & MAP_PERSISTENT_BIT) != 0) {
             if (!RENDER_BACKEND.isBufferImmutable(bufferForTarget(ctx(), target))) markPersistentlyMapped(target);
             return;
@@ -7569,36 +8400,55 @@ public class GLStateManager {
 
     public static void nglBufferSubData(int target, long offset, long size, long data) { glBufferSubData(target, offset, MemoryUtilities.memByteBuffer(data, checkedSize(size))); }
 
+    /** Handles glMapBuffer through tracked GL state and the active render backend. */
     public static ByteBuffer glMapBuffer(int target, int access) {
+        rejectExitCapture();
         final ByteBuffer buf = RENDER_BACKEND.mapBuffer(target, access);
         if (buf != null) onBufferMap(target, access);
         return buf;
     }
     public static ByteBuffer glMapBuffer(int target, int access, ByteBuffer old_buffer) { return glMapBuffer(target, access); }
+    /** Handles glMapBuffer through tracked GL state and the active render backend. */
     public static ByteBuffer glMapBuffer(int target, int access, long length, ByteBuffer old_buffer) {
+        rejectExitCapture();
         final ByteBuffer buf = RENDER_BACKEND.mapBuffer(target, access, length, old_buffer);
         if (buf != null) onBufferMap(target, access);
         return buf;
     }
+    /** Handles glMapBufferRange through tracked GL state and the active render backend. */
     public static ByteBuffer glMapBufferRange(int target, long offset, long length, int access) {
+        rejectExitCapture();
         final ByteBuffer buf = RENDER_BACKEND.mapBufferRange(target, offset, length, access);
         if (buf != null) onBufferMapRange(target, access);
         return buf;
     }
     public static ByteBuffer glMapBufferRange(int target, long offset, long length, int access, ByteBuffer old_buffer) { return glMapBufferRange(target, offset, length, access); }
+    /** Handles glMapBufferRangeAddress through tracked GL state and the active render backend. */
     public static long glMapBufferRangeAddress(int target, long offset, long length, int access) {
+        rejectExitCapture();
         final long address = RENDER_BACKEND.mapBufferRangeAddress(target, offset, length, access);
         if (address != 0L) onBufferMapRange(target, access);
         return address;
     }
-    public static void glFlushMappedBufferRange(int target, long offset, long length) { RENDER_BACKEND.flushMappedBufferRange(target, offset, length); }
-    public static boolean glUnmapBuffer(int target) { onBufferUnmap(target); return RENDER_BACKEND.unmapBuffer(target); }
+    /** Handles glFlushMappedBufferRange through tracked GL state and the active render backend. */
+    public static void glFlushMappedBufferRange(int target, long offset, long length) { rejectExitCapture(); RENDER_BACKEND.flushMappedBufferRange(target, offset, length); }
+    /** Handles glUnmapBuffer through tracked GL state and the active render backend. */
+    public static boolean glUnmapBuffer(int target) {
+        rejectExitCapture();
+        onBufferUnmap(target);
+        return RENDER_BACKEND.unmapBuffer(target);
+    }
 
-    public static void glGetBufferSubData(int target, long offset, ByteBuffer data) { RENDER_BACKEND.getBufferSubData(target, offset, data); }
-    public static void glGetBufferSubData(int target, long offset, ShortBuffer data) { RENDER_BACKEND.getBufferSubData(target, offset, data); }
-    public static void glGetBufferSubData(int target, long offset, IntBuffer data) { RENDER_BACKEND.getBufferSubData(target, offset, data); }
-    public static void glGetBufferSubData(int target, long offset, FloatBuffer data) { RENDER_BACKEND.getBufferSubData(target, offset, data); }
-    public static void glGetBufferSubData(int target, long offset, DoubleBuffer data) { RENDER_BACKEND.getBufferSubData(target, offset, data); }
+    /** Handles glGetBufferSubData through tracked GL state and the active render backend. */
+    public static void glGetBufferSubData(int target, long offset, ByteBuffer data) { rejectExitCapture(); RENDER_BACKEND.getBufferSubData(target, offset, data); }
+    /** Handles glGetBufferSubData through tracked GL state and the active render backend. */
+    public static void glGetBufferSubData(int target, long offset, ShortBuffer data) { rejectExitCapture(); RENDER_BACKEND.getBufferSubData(target, offset, data); }
+    /** Handles glGetBufferSubData through tracked GL state and the active render backend. */
+    public static void glGetBufferSubData(int target, long offset, IntBuffer data) { rejectExitCapture(); RENDER_BACKEND.getBufferSubData(target, offset, data); }
+    /** Handles glGetBufferSubData through tracked GL state and the active render backend. */
+    public static void glGetBufferSubData(int target, long offset, FloatBuffer data) { rejectExitCapture(); RENDER_BACKEND.getBufferSubData(target, offset, data); }
+    /** Handles glGetBufferSubData through tracked GL state and the active render backend. */
+    public static void glGetBufferSubData(int target, long offset, DoubleBuffer data) { rejectExitCapture(); RENDER_BACKEND.getBufferSubData(target, offset, data); }
     public static void glGetBufferSubData(int target, long offset, LongBuffer data) { glGetBufferSubData(target, offset, MemoryUtilities.memByteBuffer(data)); }
     public static void glGetBufferSubData(int target, long offset, short[] data) {
         final ByteBuffer copy = MemoryUtilities.memAlloc(data.length << 1);
@@ -7633,7 +8483,8 @@ public class GLStateManager {
 
     public static void nglGetBufferSubData(int target, long offset, long size, long data) { glGetBufferSubData(target, offset, MemoryUtilities.memByteBuffer(data, checkedSize(size))); }
 
-    public static int glGetBufferParameteri(int target, int pname) { return RENDER_BACKEND.getBufferParameteri(target, pname); }
+    /** Handles glGetBufferParameteri through tracked GL state and the active render backend. */
+    public static int glGetBufferParameteri(int target, int pname) { rejectExitCapture(); return RENDER_BACKEND.getBufferParameteri(target, pname); }
     public static int glGetBufferParameter(int target, int pname) { return glGetBufferParameteri(target, pname); }
     public static void glGetBufferParameter(int target, int pname, IntBuffer params) { params.put(params.position(), glGetBufferParameteri(target, pname)); }
     public static void glGetBufferParameteriv(int target, int pname, IntBuffer params) { params.put(params.position(), glGetBufferParameteri(target, pname)); }
@@ -7733,12 +8584,18 @@ public class GLStateManager {
 
     public static void glClearBufferSubData(int target, int internalFormat, long offset, long size, int format, int type, ByteBuffer data) { onBufferRespec(target); RENDER_BACKEND.clearBufferSubData(target, internalFormat, offset, size, format, type, data); }
     public static void glClearBufferData(int target, int internalformat, int format, int type, ByteBuffer data) { onBufferRespec(target); RENDER_BACKEND.clearBufferData(target, internalformat, format, type, data); }
-    public static boolean glIsBuffer(int buffer) { return RENDER_BACKEND.isBuffer(buffer); }
-    public static boolean glIsTexture(int texture) { return RENDER_BACKEND.isTexture(texture); }
-    public static boolean glIsFramebuffer(int framebuffer) { return RENDER_BACKEND.isFramebuffer(framebuffer); }
-    public static boolean glIsRenderbuffer(int renderbuffer) { return RENDER_BACKEND.isRenderbuffer(renderbuffer); }
-    public static boolean glIsSampler(int sampler) { return RENDER_BACKEND.isSampler(sampler); }
-    public static boolean glIsQuery(int query) { return RENDER_BACKEND.isQuery(query); }
+    /** Handles glIsBuffer through tracked GL state and the active render backend. */
+    public static boolean glIsBuffer(int buffer) { rejectExitCapture(); return RENDER_BACKEND.isBuffer(buffer); }
+    /** Handles glIsTexture through tracked GL state and the active render backend. */
+    public static boolean glIsTexture(int texture) { rejectExitCapture(); return !isDeferredDelete(texture) && RENDER_BACKEND.isTexture(texture); }
+    /** Handles glIsFramebuffer through tracked GL state and the active render backend. */
+    public static boolean glIsFramebuffer(int framebuffer) { rejectExitCapture(); return RENDER_BACKEND.isFramebuffer(framebuffer); }
+    /** Handles glIsRenderbuffer through tracked GL state and the active render backend. */
+    public static boolean glIsRenderbuffer(int renderbuffer) { rejectExitCapture(); return RENDER_BACKEND.isRenderbuffer(renderbuffer); }
+    /** Handles glIsSampler through tracked GL state and the active render backend. */
+    public static boolean glIsSampler(int sampler) { rejectExitCapture(); return RENDER_BACKEND.isSampler(sampler); }
+    /** Handles glIsQuery through tracked GL state and the active render backend. */
+    public static boolean glIsQuery(int query) { rejectExitCapture(); return RENDER_BACKEND.isQuery(query); }
     public static void glCopyBufferSubData(int readTarget, int writeTarget, long readOffset, long writeOffset, long size) { onBufferRespec(writeTarget); RENDER_BACKEND.copyBufferSubData(readTarget, writeTarget, readOffset, writeOffset, size); }
 
     private static int checkedSize(long size) {
@@ -7778,7 +8635,9 @@ public class GLStateManager {
         return bb;
     }
 
+    /** Handles glBindVertexArray through tracked GL state and the active render backend. */
     public static void glBindVertexArray(int array) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         if (DisplayListManager.isRecording()) {
             DisplayListManager.recordBindVAO(array);
@@ -7801,7 +8660,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glDeleteVertexArrays through tracked GL state and the active render backend. */
     public static void glDeleteVertexArrays(int array) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final boolean locked = acquireDrawLock();
         try {
@@ -7821,7 +8682,9 @@ public class GLStateManager {
         return RENDER_BACKEND.genVertexArrays();
     }
 
+    /** Handles glIsVertexArray through tracked GL state and the active render backend. */
     public static boolean glIsVertexArray(int array) {
+        rejectExitCapture();
         return RENDER_BACKEND.isVertexArray(array);
     }
 
@@ -7845,7 +8708,9 @@ public class GLStateManager {
         return VENDOR == NVIDIA;
     }
 
+    /** Handles glBindFramebuffer through tracked GL state and the active render backend. */
     public static void glBindFramebuffer(int target, int framebuffer) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         if (target == GL30.GL_FRAMEBUFFER) {
             if (glCtx.drawFramebuffer == framebuffer && glCtx.readFramebuffer == framebuffer) return;
@@ -7863,11 +8728,27 @@ public class GLStateManager {
         RENDER_BACKEND.bindFramebuffer(target, framebuffer);
     }
 
+    /** Handles glDeleteFramebuffers through tracked GL state and the active render backend. */
     public static void glDeleteFramebuffers(int framebuffer) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         if (glCtx.drawFramebuffer == framebuffer) { glCtx.drawFramebuffer = 0; glCtx.drawFramebufferGeneration++; }
         if (glCtx.readFramebuffer == framebuffer) glCtx.readFramebuffer = 0;
+        final int[] slots = glCtx.framebufferTextures.remove(framebuffer);
+        if (slots != null) {
+            for (int slot = 0; slot < slots.length; slot++) setFramebufferSlot(slots, slot, 0);
+        }
         RENDER_BACKEND.deleteFramebuffers(framebuffer);
+    }
+
+    /** Handles glDeleteFramebuffers through tracked GL state and the active render backend. */
+    public static void glDeleteFramebuffers(IntBuffer framebuffers) {
+        for (int i = framebuffers.position(); i < framebuffers.limit(); i++) glDeleteFramebuffers(framebuffers.get(i));
+    }
+
+    /** Handles glDeleteFramebuffers through tracked GL state and the active render backend. */
+    public static void glDeleteFramebuffers(int[] framebuffers) {
+        for (int framebuffer : framebuffers) glDeleteFramebuffers(framebuffer);
     }
 
     public static int glGenFramebuffers() {
@@ -7875,29 +8756,147 @@ public class GLStateManager {
         return RENDER_BACKEND.genFramebuffers();
     }
 
+    /** Handles glCheckFramebufferStatus through tracked GL state and the active render backend. */
     public static int glCheckFramebufferStatus(int target) {
+        rejectExitCapture();
         return RENDER_BACKEND.checkFramebufferStatus(target);
     }
 
+    /** Handles glGetFramebufferAttachmentParameteri through tracked GL state and the active render backend. */
     public static int glGetFramebufferAttachmentParameteri(int target, int attachment, int pname) {
+        rejectExitCapture();
         return RENDER_BACKEND.getFramebufferAttachmentParameteri(target, attachment, pname);
     }
 
+    /** Handles glFramebufferTexture2D through tracked GL state and the active render backend. */
     public static void glFramebufferTexture2D(int target, int attachment, int textarget, int texture, int level) {
+        rejectExitCapture();
+        if (!beginAttach(target, attachment, texture)) return;
         RENDER_BACKEND.framebufferTexture2D(target, attachment, textarget, texture, level);
     }
 
-    public static void glFramebufferTexture(int target, int attachment, int texture, int level) { RENDER_BACKEND.framebufferTexture(target, attachment, texture, level); }
+    /** Handles glFramebufferTexture1D through tracked GL state and the active render backend. */
+    public static void glFramebufferTexture1D(int target, int attachment, int textarget, int texture, int level) {
+        rejectExitCapture();
+        if (!beginAttach(target, attachment, texture)) return;
+        RENDER_BACKEND.framebufferTexture1D(target, attachment, textarget, texture, level);
+    }
+
+    /** Handles glFramebufferTexture3D through tracked GL state and the active render backend. */
+    public static void glFramebufferTexture3D(int target, int attachment, int textarget, int texture, int level, int zoffset) {
+        rejectExitCapture();
+        if (!beginAttach(target, attachment, texture)) return;
+        RENDER_BACKEND.framebufferTexture3D(target, attachment, textarget, texture, level, zoffset);
+    }
+
+    /** Handles glFramebufferTextureLayer through tracked GL state and the active render backend. */
+    public static void glFramebufferTextureLayer(int target, int attachment, int texture, int level, int layer) {
+        rejectExitCapture();
+        if (!beginAttach(target, attachment, texture)) return;
+        RENDER_BACKEND.framebufferTextureLayer(target, attachment, texture, level, layer);
+    }
+
+    /** Handles glFramebufferTexture through tracked GL state and the active render backend. */
+    public static void glFramebufferTexture(int target, int attachment, int texture, int level) {
+        rejectExitCapture();
+        if (!beginAttach(target, attachment, texture)) return;
+        RENDER_BACKEND.framebufferTexture(target, attachment, texture, level);
+    }
+
+    /** Handles glFramebufferTextureFace through tracked GL state and the active render backend. */
+    public static void glFramebufferTextureFace(int target, int attachment, int texture, int level, int face) {
+        glFramebufferTexture2D(target, attachment, face, texture, level);
+    }
+
+    /** Handles glNamedFramebufferTexture through tracked GL state and the active render backend. */
+    public static void glNamedFramebufferTexture(int framebuffer, int attachment, int texture, int level) {
+        rejectExitCapture();
+        if (!beginAttach(ctx(), framebuffer, attachment, texture)) return;
+        RENDER_BACKEND.namedFramebufferTexture(framebuffer, attachment, texture, level);
+    }
+
+    /** Swaps draw framebuffer for GLStateManager. */
+    private static int swapDrawFramebuffer(int framebuffer) {
+        final GLContextState glCtx = ctx();
+        final int previous = glCtx.drawFramebuffer;
+        glCtx.drawFramebuffer = framebuffer;
+        RENDER_BACKEND.bindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, framebuffer);
+        return previous;
+    }
+
+    /** Handles glNamedFramebufferTextureLayer through tracked GL state and the active render backend. */
+    public static void glNamedFramebufferTextureLayer(int framebuffer, int attachment, int texture, int level, int layer) {
+        final int previous = swapDrawFramebuffer(framebuffer);
+        glFramebufferTextureLayer(GL30.GL_DRAW_FRAMEBUFFER, attachment, texture, level, layer);
+        swapDrawFramebuffer(previous);
+    }
+
+    /** Handles glNamedFramebufferRenderbuffer through tracked GL state and the active render backend. */
+    public static void glNamedFramebufferRenderbuffer(int framebuffer, int attachment, int renderbuffertarget, int renderbuffer) {
+        final int previous = swapDrawFramebuffer(framebuffer);
+        glFramebufferRenderbuffer(GL30.GL_DRAW_FRAMEBUFFER, attachment, renderbuffertarget, renderbuffer);
+        swapDrawFramebuffer(previous);
+    }
+
+    /** Handles glNamedFramebufferTexture1DEXT through tracked GL state and the active render backend. */
+    public static void glNamedFramebufferTexture1DEXT(int framebuffer, int attachment, int textarget, int texture, int level) {
+        final int previous = swapDrawFramebuffer(framebuffer);
+        glFramebufferTexture1D(GL30.GL_DRAW_FRAMEBUFFER, attachment, textarget, texture, level);
+        swapDrawFramebuffer(previous);
+    }
+
+    /** Handles glNamedFramebufferTexture2DEXT through tracked GL state and the active render backend. */
+    public static void glNamedFramebufferTexture2DEXT(int framebuffer, int attachment, int textarget, int texture, int level) {
+        final int previous = swapDrawFramebuffer(framebuffer);
+        glFramebufferTexture2D(GL30.GL_DRAW_FRAMEBUFFER, attachment, textarget, texture, level);
+        swapDrawFramebuffer(previous);
+    }
+
+    /** Handles glNamedFramebufferTexture3DEXT through tracked GL state and the active render backend. */
+    public static void glNamedFramebufferTexture3DEXT(int framebuffer, int attachment, int textarget, int texture, int level, int zoffset) {
+        final int previous = swapDrawFramebuffer(framebuffer);
+        glFramebufferTexture3D(GL30.GL_DRAW_FRAMEBUFFER, attachment, textarget, texture, level, zoffset);
+        swapDrawFramebuffer(previous);
+    }
+
+    /** Handles glNamedFramebufferTextureEXT through tracked GL state and the active render backend. */
+    public static void glNamedFramebufferTextureEXT(int framebuffer, int attachment, int texture, int level) {
+        final int previous = swapDrawFramebuffer(framebuffer);
+        glFramebufferTexture(GL30.GL_DRAW_FRAMEBUFFER, attachment, texture, level);
+        swapDrawFramebuffer(previous);
+    }
+
+    /** Handles glNamedFramebufferTextureFaceEXT through tracked GL state and the active render backend. */
+    public static void glNamedFramebufferTextureFaceEXT(int framebuffer, int attachment, int texture, int level, int face) {
+        glNamedFramebufferTexture2DEXT(framebuffer, attachment, face, texture, level);
+    }
+
+    /** Updates attach texture for reading state for GLStateManager. */
+    public static void attachTextureForReading(int attachment, int texture) {
+        if (isDeferredDelete(texture)) return;
+        final GLContextState glCtx = ctx();
+        trackFramebufferAttachment(glCtx, glCtx.readFramebuffer, attachment, texture);
+        RENDER_BACKEND.framebufferTexture2D(GL30.GL_READ_FRAMEBUFFER, attachment, GL11.GL_TEXTURE_2D, texture, 0);
+    }
 
     public static int glGenRenderbuffers() {
         requireContext("glGenRenderbuffers");
         return RENDER_BACKEND.genRenderbuffers();
     }
-    public static void glDeleteRenderbuffers(int renderbuffer) { RENDER_BACKEND.deleteRenderbuffers(renderbuffer); }
-    public static void glBindRenderbuffer(int target, int renderbuffer) { RENDER_BACKEND.bindRenderbuffer(target, renderbuffer); }
-    public static void glRenderbufferStorage(int target, int internalformat, int width, int height) { RENDER_BACKEND.renderbufferStorage(target, internalformat, width, height); }
-    public static void glRenderbufferStorageMultisample(int target, int samples, int internalformat, int width, int height) { RENDER_BACKEND.renderbufferStorageMultisample(target, samples, internalformat, width, height); }
-    public static void glFramebufferRenderbuffer(int target, int attachment, int renderbuffertarget, int renderbuffer) { RENDER_BACKEND.framebufferRenderbuffer(target, attachment, renderbuffertarget, renderbuffer); }
+    /** Handles glDeleteRenderbuffers through tracked GL state and the active render backend. */
+    public static void glDeleteRenderbuffers(int renderbuffer) { rejectExitCapture(); RENDER_BACKEND.deleteRenderbuffers(renderbuffer); }
+    /** Handles glBindRenderbuffer through tracked GL state and the active render backend. */
+    public static void glBindRenderbuffer(int target, int renderbuffer) { rejectExitCapture(); RENDER_BACKEND.bindRenderbuffer(target, renderbuffer); }
+    /** Handles glRenderbufferStorage through tracked GL state and the active render backend. */
+    public static void glRenderbufferStorage(int target, int internalformat, int width, int height) { rejectExitCapture(); RENDER_BACKEND.renderbufferStorage(target, internalformat, width, height); }
+    /** Handles glRenderbufferStorageMultisample through tracked GL state and the active render backend. */
+    public static void glRenderbufferStorageMultisample(int target, int samples, int internalformat, int width, int height) { rejectExitCapture(); RENDER_BACKEND.renderbufferStorageMultisample(target, samples, internalformat, width, height); }
+    /** Handles glFramebufferRenderbuffer through tracked GL state and the active render backend. */
+    public static void glFramebufferRenderbuffer(int target, int attachment, int renderbuffertarget, int renderbuffer) {
+        rejectExitCapture();
+        beginAttach(target, attachment, 0);
+        RENDER_BACKEND.framebufferRenderbuffer(target, attachment, renderbuffertarget, renderbuffer);
+    }
 
     public static void glGenQueries(IntBuffer ids) {
         requireContext("glGenQueries");
@@ -7907,14 +8906,20 @@ public class GLStateManager {
         requireContext("glGenQueries");
         return RENDER_BACKEND.genQueries();
     }
-    public static void glDeleteQueries(int id) { RENDER_BACKEND.deleteQueries(id); }
-    public static void glBeginQuery(int target, int id) { RENDER_BACKEND.beginQuery(target, id); }
-    public static void glEndQuery(int target) { RENDER_BACKEND.endQuery(target); }
-    public static void glGetQueryObjectui(int id, int pname, IntBuffer params) { RENDER_BACKEND.getQueryObjectui(id, pname, params); }
-    public static int glGetQueryObjecti(int id, int pname) { return RENDER_BACKEND.getQueryObjecti(id, pname); }
+    /** Handles glDeleteQueries through tracked GL state and the active render backend. */
+    public static void glDeleteQueries(int id) { rejectExitCapture(); RENDER_BACKEND.deleteQueries(id); }
+    /** Handles glBeginQuery through tracked GL state and the active render backend. */
+    public static void glBeginQuery(int target, int id) { rejectExitCapture(); RENDER_BACKEND.beginQuery(target, id); }
+    /** Handles glEndQuery through tracked GL state and the active render backend. */
+    public static void glEndQuery(int target) { rejectExitCapture(); RENDER_BACKEND.endQuery(target); }
+    /** Handles glGetQueryObjectui through tracked GL state and the active render backend. */
+    public static void glGetQueryObjectui(int id, int pname, IntBuffer params) { rejectExitCapture(); RENDER_BACKEND.getQueryObjectui(id, pname, params); }
+    /** Handles glGetQueryObjecti through tracked GL state and the active render backend. */
+    public static int glGetQueryObjecti(int id, int pname) { rejectExitCapture(); return RENDER_BACKEND.getQueryObjecti(id, pname); }
 
     /** Binds a buffer to an indexed target and updates the binding caches. */
     public static void glBindBufferBase(int target, int index, int buffer) {
+        rejectExitCapture();
         final boolean locked = acquireDrawLock();
         try {
             final GLContextState glCtx = ctx();
@@ -7928,6 +8933,7 @@ public class GLStateManager {
 
     /** Binds a buffer range and tracks its generic and indexed bindings. */
     public static void glBindBufferRange(int target, int index, int buffer, long offset, long size) {
+        rejectExitCapture();
         final boolean locked = acquireDrawLock();
         try {
             final GLContextState glCtx = ctx();
@@ -7962,15 +8968,24 @@ public class GLStateManager {
         return RENDER_BACKEND.getIndexedBufferBinding(target, index);
     }
 
-    public static int glGetUniformBlockIndex(int program, CharSequence name) { return RENDER_BACKEND.getUniformBlockIndex(program, name); }
-    public static void glUniformBlockBinding(int program, int blockIndex, int binding) { RENDER_BACKEND.uniformBlockBinding(program, blockIndex, binding); }
-    public static void glBindFragDataLocation(int program, int colorNumber, CharSequence name) { RENDER_BACKEND.bindFragDataLocation(program, colorNumber, name); }
-    public static void glQueryCounter(int id, int target) { RENDER_BACKEND.queryCounter(id, target); }
-    public static long glGetQueryObjectui64(int id, int pname) { return RENDER_BACKEND.getQueryObjectui64(id, pname); }
-    public static void glUniform3(int location, float[] values) { RENDER_BACKEND.uniform3fv(location, values); }
-    public static void glUniform4(int location, float[] values) { RENDER_BACKEND.uniform4fv(location, values); }
+    /** Handles glGetUniformBlockIndex through tracked GL state and the active render backend. */
+    public static int glGetUniformBlockIndex(int program, CharSequence name) { rejectExitCapture(); return RENDER_BACKEND.getUniformBlockIndex(program, name); }
+    /** Handles glUniformBlockBinding through tracked GL state and the active render backend. */
+    public static void glUniformBlockBinding(int program, int blockIndex, int binding) { rejectExitCapture(); RENDER_BACKEND.uniformBlockBinding(program, blockIndex, binding); }
+    /** Handles glBindFragDataLocation through tracked GL state and the active render backend. */
+    public static void glBindFragDataLocation(int program, int colorNumber, CharSequence name) { rejectExitCapture(); RENDER_BACKEND.bindFragDataLocation(program, colorNumber, name); }
+    /** Handles glQueryCounter through tracked GL state and the active render backend. */
+    public static void glQueryCounter(int id, int target) { rejectExitCapture(); RENDER_BACKEND.queryCounter(id, target); }
+    /** Handles glGetQueryObjectui64 through tracked GL state and the active render backend. */
+    public static long glGetQueryObjectui64(int id, int pname) { rejectExitCapture(); return RENDER_BACKEND.getQueryObjectui64(id, pname); }
+    /** Handles glUniform3 through tracked GL state and the active render backend. */
+    public static void glUniform3(int location, float[] values) { rejectExitCapture(); RENDER_BACKEND.uniform3fv(location, values); }
+    /** Handles glUniform4 through tracked GL state and the active render backend. */
+    public static void glUniform4(int location, float[] values) { rejectExitCapture(); RENDER_BACKEND.uniform4fv(location, values); }
 
+    /** Handles glGetInteger through tracked GL state and the active render backend. */
     public static void glGetInteger(int pname, int[] params) {
+        rejectExitCapture();
         if (!isCachingEnabled() || params.length == 0) {
             RENDER_BACKEND.getInteger(pname, params);
             return;
@@ -8006,23 +9021,30 @@ public class GLStateManager {
             }
         }
     }
+    /** Handles nglMapBuffer through tracked GL state and the active render backend. */
     public static long nglMapBuffer(int target, int access) {
+        rejectExitCapture();
         final ByteBuffer buf = RENDER_BACKEND.mapBuffer(target, access);
         if (buf != null) onBufferMap(target, access);
         return buf == null ? 0L : MemoryUtilities.memAddress0(buf);
     }
+    /** Handles nglMultiDrawElementsBaseVertex through tracked GL state and the active render backend. */
     public static void nglMultiDrawElementsBaseVertex(int mode, long count, int type, long indices, int primcount, long basevertex) {
+        rejectExitCapture();
         RENDER_BACKEND.multiDrawElementsBaseVertex(mode, count, type, indices, primcount, basevertex);
     }
 
     public static void glObjectLabel(int identifier, int name, CharSequence label) { RENDER_BACKEND.objectLabel(identifier, name, label); }
-    public static String glGetObjectLabel(int identifier, int name, int bufSize) { return RENDER_BACKEND.getObjectLabel(identifier, name); }
+    /** Handles glGetObjectLabel through tracked GL state and the active render backend. */
+    public static String glGetObjectLabel(int identifier, int name, int bufSize) { rejectExitCapture(); return RENDER_BACKEND.getObjectLabel(identifier, name); }
     public static void glPushDebugGroup(int source, int id, CharSequence message) { RENDER_BACKEND.pushDebugGroup(source, id, message); }
     public static void glPopDebugGroup() { RENDER_BACKEND.popDebugGroup(); }
     public static void glDebugMessageInsert(int source, int type, int id, int severity, CharSequence buf) { RENDER_BACKEND.debugMessageInsert(source, type, id, severity, buf); }
     public static void glDebugMessageControl(int source, int type, int severity, IntBuffer ids, boolean enabled) { RENDER_BACKEND.debugMessageControl(source, type, severity, ids, enabled); }
 
+    /** Handles glGetDebugMessageLog through tracked GL state and the active render backend. */
     public static int glGetDebugMessageLog(int count, IntBuffer sources, IntBuffer types, IntBuffer ids, IntBuffer severities, IntBuffer lengths, ByteBuffer messageLog) {
+        rejectExitCapture();
         return RENDER_BACKEND.getDebugMessageLog(count, sources, types, ids, severities, lengths, messageLog);
     }
 
@@ -8034,11 +9056,15 @@ public class GLStateManager {
         RENDER_BACKEND.debugMessageCallback(GLDebug.adaptDebugCallback(callback), 0L);
     }
 
+    /** Handles glGenerateMipmap through tracked GL state and the active render backend. */
     public static void glGenerateMipmap(int target) {
+        rejectExitCapture();
         RENDER_BACKEND.generateMipmap(target);
     }
 
+    /** Handles glBlitFramebuffer through tracked GL state and the active render backend. */
     public static void glBlitFramebuffer(int srcX0, int srcY0, int srcX1, int srcY1, int dstX0, int dstY0, int dstX1, int dstY1, int mask, int filter) {
+        rejectExitCapture();
         RENDER_BACKEND.blitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
     }
 
@@ -8046,6 +9072,7 @@ public class GLStateManager {
         glActiveTexture(textureUnit);
     }
 
+    /** Handles glMultiTexCoord2f through tracked GL state and the active render backend. */
     public static void glMultiTexCoord2f(int target, float s, float t) {
         final GLContextState glCtx = ctx();
         if (target == GL13.GL_TEXTURE0) {
@@ -8069,6 +9096,8 @@ public class GLStateManager {
                 }
                 beforeUncapturedStateChange();
                 glCtx.ffp.setTexCoord(unit, s, t, 0.0f, 1.0f);
+            } else {
+                glCtx.exitCapture.reject();
             }
         }
     }
@@ -8081,22 +9110,26 @@ public class GLStateManager {
         glMultiTexCoord2f(target, s, t);
     }
 
+    /** Updates lightmap texture coords for GLStateManager. */
     public static void setLightmapTextureCoords(int unit, float x, float y) {
-        if (unit == GL13.GL_TEXTURE1) {
-            final RecordMode mode = DisplayListManager.getRecordMode();
-            if (mode != RecordMode.NONE) {
-                DisplayListManager.recordStateCommand(() -> setLightmapTextureCoords(unit, x, y));
-                if (mode == RecordMode.COMPILE) return;
-            }
-            final GLContextState glCtx = ctx();
-            glCtx.lastBrightnessX = x;
-            glCtx.lastBrightnessY = y;
-            glCtx.dirtyLightmapAttrib = true;
-            if (GLSMHooks.LIGHTMAP_COORDS.hasListeners()) {
-                GLSMHooks.lightmapCoordsEvent.x = x;
-                GLSMHooks.lightmapCoordsEvent.y = y;
-                GLSMHooks.LIGHTMAP_COORDS.post(GLSMHooks.lightmapCoordsEvent);
-            }
+        if (unit != GL13.GL_TEXTURE1) {
+            rejectExitCapture();
+            return;
+        }
+        final GLContextState glCtx = ctx();
+        glCtx.exitCapture.write(ExitStateCapture.LIGHTMAP);
+        final RecordMode mode = DisplayListManager.getRecordMode();
+        if (mode != RecordMode.NONE) {
+            DisplayListManager.recordStateCommand(() -> setLightmapTextureCoords(unit, x, y));
+            if (mode == RecordMode.COMPILE) return;
+        }
+        glCtx.lastBrightnessX = x;
+        glCtx.lastBrightnessY = y;
+        glCtx.dirtyLightmapAttrib = true;
+        if (GLSMHooks.LIGHTMAP_COORDS.hasListeners()) {
+            GLSMHooks.lightmapCoordsEvent.x = x;
+            GLSMHooks.lightmapCoordsEvent.y = y;
+            GLSMHooks.LIGHTMAP_COORDS.post(GLSMHooks.lightmapCoordsEvent);
         }
     }
 
@@ -8120,6 +9153,7 @@ public class GLStateManager {
      * @return true (always - caller should skip the GL call)
      */
     private static boolean guardUnsupportedFFP(String function, String explanation) {
+        rejectExitCapture();
         if (!SystemProperties.FFP_WARN_ON_UNSUPPORTED) {
             throw new UnsupportedOperationException(function + ": " + explanation);
         }
@@ -8163,7 +9197,9 @@ public class GLStateManager {
         handleTexEnvScalar(target, pname, param);
     }
 
+    /** Handles glTexEnv through tracked GL state and the active render backend. */
     public static void glTexEnv(int target, int pname, FloatBuffer params) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         if (target == GL11.GL_TEXTURE_ENV && pname == GL11.GL_TEXTURE_ENV_COLOR && params.remaining() >= 4) {
             beforeUncapturedStateChange();
@@ -8186,7 +9222,9 @@ public class GLStateManager {
         // Silently ignore other buffer glTexEnv calls (some mods pass combine params via buffers)
     }
 
+    /** Handles glTexEnv through tracked GL state and the active render backend. */
     public static void glTexEnv(int target, int pname, IntBuffer params) {
+        rejectExitCapture();
         if (target == GL11.GL_TEXTURE_ENV) {
             handleTexEnvScalar(target, pname, (float) params.get(params.position()));
         }
@@ -8287,7 +9325,9 @@ public class GLStateManager {
         return (float) glGetTexEnvi(target, pname);
     }
 
+    /** Handles glGetTexEnvi through tracked GL state and the active render backend. */
     public static int glGetTexEnvi(int target, int pname) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         if (target != GL11.GL_TEXTURE_ENV) return 0;
 
@@ -8314,7 +9354,9 @@ public class GLStateManager {
         };
     }
 
+    /** Handles glGetTexEnv through tracked GL state and the active render backend. */
     public static void glGetTexEnv(int target, int pname, IntBuffer params) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         if (target != GL11.GL_TEXTURE_ENV) return;
         if (pname == GL11.GL_TEXTURE_ENV_COLOR) {
@@ -8328,7 +9370,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glGetTexEnv through tracked GL state and the active render backend. */
     public static void glGetTexEnv(int target, int pname, FloatBuffer params) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         if (target != GL11.GL_TEXTURE_ENV) return;
         if (pname == GL11.GL_TEXTURE_ENV_COLOR) {
@@ -8432,7 +9476,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glGetTexGeni through tracked GL state and the active render backend. */
     public static int glGetTexGeni(int coord, int pname) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         if (pname == GL11.GL_TEXTURE_GEN_MODE) {
             return glCtx.textures.getTexGenState(glCtx.activeTextureUnit.getValue()).getMode(coord);
@@ -8454,7 +9500,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glGetTexGen through tracked GL state and the active render backend. */
     public static void glGetTexGen(int coord, int pname, FloatBuffer params) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final var state = glCtx.textures.getTexGenState(glCtx.activeTextureUnit.getValue());
         if (pname == GL11.GL_TEXTURE_GEN_MODE) {
@@ -8474,7 +9522,9 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glGetTexGen through tracked GL state and the active render backend. */
     public static void glGetTexGen(int coord, int pname, DoubleBuffer params) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         final var state = glCtx.textures.getTexGenState(glCtx.activeTextureUnit.getValue());
         if (pname == GL11.GL_TEXTURE_GEN_MODE) {
@@ -8502,21 +9552,29 @@ public class GLStateManager {
         guardUnsupportedFFP("glAccum", "The accumulation buffer is not available in GL 3.3 core profile.");
     }
 
+    /** Handles glFeedbackBuffer through tracked GL state and the active render backend. */
     public static void glFeedbackBuffer(int type, FloatBuffer buffer) {
+        rejectExitCapture();
         FeedbackManager.glFeedbackBuffer(type, buffer);
     }
 
+    /** Handles glRenderMode through tracked GL state and the active render backend. */
     public static int glRenderMode(int mode) {
+        rejectExitCapture();
         return FeedbackManager.glRenderMode(mode);
     }
 
+    /** Handles glPassThrough through tracked GL state and the active render backend. */
     public static void glPassThrough(float token) {
+        rejectExitCapture();
         FeedbackManager.glPassThrough(token);
     }
 
     private static boolean selectWarned = false;
 
+    /** Handles glSelectBuffer through tracked GL state and the active render backend. */
     public static void glSelectBuffer(IntBuffer buffer) {
+        rejectExitCapture();
         if (!selectWarned) {
             LOGGER.warn("glSelectBuffer: selection mode not emulated");
             selectWarned = true;
@@ -8531,7 +9589,9 @@ public class GLStateManager {
 
     public static void glLoadName(int name) { /* no-op */ }
 
+    /** Handles glLinkProgram through tracked GL state and the active render backend. */
     public static void glLinkProgram(int program) {
+        rejectExitCapture();
         if (ShaderManager.isEnabled()) {
             generateVertexShaderIfNeeded(program);
         }
@@ -8545,15 +9605,21 @@ public class GLStateManager {
         CompatUniformManager.onLinkProgram(program);
     }
 
+    /** Handles glProgramParameteri through tracked GL state and the active render backend. */
     public static void glProgramParameteri(int program, int pname, int value) {
+        rejectExitCapture();
         RENDER_BACKEND.programParameteri(program, pname, value);
     }
 
+    /** Handles glGetProgramBinary through tracked GL state and the active render backend. */
     public static void glGetProgramBinary(int program, IntBuffer length, IntBuffer binaryFormat, ByteBuffer binary) {
+        rejectExitCapture();
         RENDER_BACKEND.getProgramBinary(program, length, binaryFormat, binary);
     }
 
+    /** Handles glProgramBinary through tracked GL state and the active render backend. */
     public static void glProgramBinary(int program, int binaryFormat, ByteBuffer binary) {
+        rejectExitCapture();
         RENDER_BACKEND.programBinary(program, binaryFormat, binary);
         if (RENDER_BACKEND.getProgrami(program, GL20.GL_LINK_STATUS) == GL11.GL_TRUE) {
             CompatUniformManager.onLinkProgram(program);
@@ -8617,7 +9683,9 @@ public class GLStateManager {
         return programsPendingDeletion.contains(program);
     }
 
+    /** Handles glDeleteProgram through tracked GL state and the active render backend. */
     public static void glDeleteProgram(int program) {
+        rejectExitCapture();
         if (program == 0) return;
         CompatUniformManager.onDeleteProgram(program);
 
@@ -8638,7 +9706,9 @@ public class GLStateManager {
         return RENDER_BACKEND.createShader(type);
     }
 
+    /** Handles glCompileShader through tracked GL state and the active render backend. */
     public static void glCompileShader(int shader) {
+        rejectExitCapture();
         RENDER_BACKEND.compileShader(shader);
     }
 
@@ -8650,70 +9720,149 @@ public class GLStateManager {
         return program;
     }
 
+    /** Handles glAttachShader through tracked GL state and the active render backend. */
     public static void glAttachShader(int program, int shader) {
+        rejectExitCapture();
         RENDER_BACKEND.attachShader(program, shader);
     }
 
+    /** Handles glDetachShader through tracked GL state and the active render backend. */
     public static void glDetachShader(int program, int shader) {
+        rejectExitCapture();
         RENDER_BACKEND.detachShader(program, shader);
     }
 
+    /** Handles glDeleteShader through tracked GL state and the active render backend. */
     public static void glDeleteShader(int shader) {
+        rejectExitCapture();
         RENDER_BACKEND.deleteShader(shader);
     }
 
+    /** Handles glBindAttribLocation through tracked GL state and the active render backend. */
     public static void glBindAttribLocation(int program, int index, CharSequence name) {
+        rejectExitCapture();
         RENDER_BACKEND.bindAttribLocation(program, index, name);
     }
 
+    /** Handles glValidateProgram through tracked GL state and the active render backend. */
     public static void glValidateProgram(int program) {
+        rejectExitCapture();
         RENDER_BACKEND.validateProgram(program);
     }
 
+    /** Handles glGetShaderi through tracked GL state and the active render backend. */
     public static int glGetShaderi(int shader, int pname) {
+        rejectExitCapture();
         return RENDER_BACKEND.getShaderi(shader, pname);
     }
 
+    /** Handles glGetShaderInfoLog through tracked GL state and the active render backend. */
     public static String glGetShaderInfoLog(int shader, int maxLength) {
+        rejectExitCapture();
         return RENDER_BACKEND.getShaderInfoLog(shader, maxLength);
     }
 
+    /** Handles glGetShaderInfoLog through tracked GL state and the active render backend. */
     public static String glGetShaderInfoLog(int shader) {
+        rejectExitCapture();
         return RENDER_BACKEND.getShaderInfoLog(shader);
     }
 
+    /** Handles glGetProgrami through tracked GL state and the active render backend. */
     public static int glGetProgrami(int program, int pname) {
+        rejectExitCapture();
         return RENDER_BACKEND.getProgrami(program, pname);
     }
 
+    /** Handles glGetProgramInfoLog through tracked GL state and the active render backend. */
     public static String glGetProgramInfoLog(int program, int maxLength) {
+        rejectExitCapture();
         return RENDER_BACKEND.getProgramInfoLog(program, maxLength);
     }
 
+    /** Handles glGetProgramInfoLog through tracked GL state and the active render backend. */
     public static String glGetProgramInfoLog(int program) {
+        rejectExitCapture();
         return RENDER_BACKEND.getProgramInfoLog(program);
     }
 
+    /** Handles glIsProgram through tracked GL state and the active render backend. */
     public static boolean glIsProgram(int obj) {
+        rejectExitCapture();
         final boolean valid = RENDER_BACKEND.isProgram(obj);
         if (!valid) programsPendingDeletion.remove(obj);
         return valid;
     }
 
+    /** Handles glIsShader through tracked GL state and the active render backend. */
     public static boolean glIsShader(int obj) {
+        rejectExitCapture();
         return RENDER_BACKEND.isShader(obj);
     }
 
+    /** Handles glBindImageTexture through tracked GL state and the active render backend. */
     public static void glBindImageTexture(int unit, int texture, int level, boolean layered, int layer, int access, int format) {
+        rejectExitCapture();
+        if (isDeferredDelete(texture)) return;
         final GLContextState glCtx = ctx();
         final ImageUnitBinding binding = glCtx.imageUnits.get(unit);
         if (binding == null) {
             warnOnce("imageUnitRange", "glBindImageTexture unit {} exceeds GL_MAX_IMAGE_UNITS {}", unit, glCtx.imageUnits.size());
         } else {
-            binding.setBinding(texture, level, layered, layer, access, format);
+            binding.setBinding(texture, level, texture != 0 && layered, texture != 0 ? layer : 0, access, format);
             if (texture != 0 && unit > glCtx.maxBoundImageUnit) glCtx.maxBoundImageUnit = unit;
         }
+        if (access != GL15.GL_READ_ONLY) TextureInfoCache.INSTANCE.onWrittenOutsideUploads(texture);
         RENDER_BACKEND.bindImageTexture(unit, texture, level, layered, layer, access, format);
+    }
+
+    /** Handles glBindImageTextures through tracked GL state and the active render backend. */
+    public static void glBindImageTextures(int first, int count, IntBuffer textures) {
+        if (first < 0 || first + count > ctx().imageUnits.size()) return;
+        if (textures == null) {
+            for (int i = 0; i < count; i++) bindImageUnitByName(first + i, 0);
+            return;
+        }
+        requireRemaining(textures, count);
+        for (int i = 0; i < count; i++) bindImageUnitByName(first + i, textures.get(textures.position() + i));
+    }
+
+    /** Handles glBindImageTextures through tracked GL state and the active render backend. */
+    public static void glBindImageTextures(int first, IntBuffer textures) {
+        if (textures != null) glBindImageTextures(first, textures.remaining(), textures);
+    }
+
+    /** Handles glBindImageTextures through tracked GL state and the active render backend. */
+    public static void glBindImageTextures(int first, int[] textures) {
+        if (textures != null) glBindImageTextures(first, textures.length, IntBuffer.wrap(textures));
+    }
+
+    /** Binds image unit by name for GLStateManager. */
+    private static void bindImageUnitByName(int unit, int texture) {
+        if (texture == 0) {
+            glBindImageTexture(unit, 0, 0, false, 0, GL15.GL_READ_ONLY, GL30.GL_R8);
+            return;
+        }
+        if (isDeferredDelete(texture)) return;
+        final int format = TextureInfoCache.INSTANCE.getInfo(texture).getInternalFormat();
+        if (!isImageFormat(format)) return;
+        final boolean layered = switch (non2DTextureTargets.get(texture)) {
+            case GL30.GL_TEXTURE_1D_ARRAY, GL30.GL_TEXTURE_2D_ARRAY, GL12.GL_TEXTURE_3D, GL13.GL_TEXTURE_CUBE_MAP, GL40.GL_TEXTURE_CUBE_MAP_ARRAY, GL32.GL_TEXTURE_2D_MULTISAMPLE_ARRAY -> true;
+            default -> false;
+        };
+        glBindImageTexture(unit, texture, 0, layered, 0, GL15.GL_READ_WRITE, format);
+    }
+
+    /** Reports whether image format applies to GLStateManager. */
+    private static boolean isImageFormat(int format) {
+        return switch (format) {
+            case GL30.GL_RGBA32F, GL30.GL_RGBA16F, GL30.GL_RG32F, GL30.GL_RG16F, GL30.GL_R11F_G11F_B10F, GL30.GL_R32F, GL30.GL_R16F,
+                 GL30.GL_RGBA32UI, GL30.GL_RGBA16UI, GL33.GL_RGB10_A2UI, GL30.GL_RGBA8UI, GL30.GL_RG32UI, GL30.GL_RG16UI, GL30.GL_RG8UI, GL30.GL_R32UI, GL30.GL_R16UI, GL30.GL_R8UI,
+                 GL30.GL_RGBA32I, GL30.GL_RGBA16I, GL30.GL_RGBA8I, GL30.GL_RG32I, GL30.GL_RG16I, GL30.GL_RG8I, GL30.GL_R32I, GL30.GL_R16I, GL30.GL_R8I,
+                 GL11.GL_RGBA16, GL11.GL_RGB10_A2, GL11.GL_RGBA8, GL30.GL_RG16, GL30.GL_RG8, GL30.GL_R16, GL30.GL_R8,
+                 GL31.GL_RGBA16_SNORM, GL31.GL_RGBA8_SNORM, GL31.GL_RG16_SNORM, GL31.GL_RG8_SNORM, GL31.GL_R16_SNORM, GL31.GL_R8_SNORM -> true;
+            default -> false;
+        };
     }
 
     public static ImageUnitBinding getImageUnitBinding(int unit) {
@@ -8739,11 +9888,13 @@ public class GLStateManager {
 
     /** Returns the integer value for an indexed GL query. */
     public static int glGetInteger(int pname, int index) {
+        rejectExitCapture();
         return indexedIntegerOrBackend(pname, index);
     }
 
     /** Returns the integer value for an indexed GL query. */
     public static int glGetIntegeri(int pname, int index) {
+        rejectExitCapture();
         return indexedIntegerOrBackend(pname, index);
     }
 
@@ -8753,11 +9904,13 @@ public class GLStateManager {
 
     /** Writes an indexed integer query result without advancing the buffer position. */
     public static void glGetIntegeri_v(int pname, int index, IntBuffer params) {
+        rejectExitCapture();
         params.put(params.position(), indexedIntegerOrBackend(pname, index));
     }
 
     /** Writes an indexed query result as a GL boolean. */
     public static void glGetBooleani_v(int pname, int index, ByteBuffer params) {
+        rejectExitCapture();
         params.put(params.position(), (byte) (indexedIntegerOrBackend(pname, index) != 0 ? GL11.GL_TRUE : GL11.GL_FALSE));
     }
 
@@ -8765,16 +9918,23 @@ public class GLStateManager {
         glGetBooleani_v(pname, index, params);
     }
 
-    public static void glMemoryBarrier(int barriers) { RENDER_BACKEND.memoryBarrier(barriers); }
+    /** Handles glMemoryBarrier through tracked GL state and the active render backend. */
+    public static void glMemoryBarrier(int barriers) { rejectExitCapture(); RENDER_BACKEND.memoryBarrier(barriers); }
+    /** Handles glCopyImageSubData through tracked GL state and the active render backend. */
     public static void glCopyImageSubData(int srcName, int srcTarget, int srcLevel, int srcX, int srcY, int srcZ,
                                            int dstName, int dstTarget, int dstLevel, int dstX, int dstY, int dstZ,
                                            int srcWidth, int srcHeight, int srcDepth) {
+        rejectExitCapture();
         RENDER_BACKEND.copyImageSubData(srcName, srcTarget, srcLevel, srcX, srcY, srcZ,
             dstName, dstTarget, dstLevel, dstX, dstY, dstZ, srcWidth, srcHeight, srcDepth);
+        if (dstTarget != GL30.GL_RENDERBUFFER && dstLevel == 0) TextureInfoCache.INSTANCE.onContentsChanged(dstName);
     }
-    public static void glDispatchCompute(int x, int y, int z) { RENDER_BACKEND.dispatchCompute(x, y, z); }
+    /** Handles glDispatchCompute through tracked GL state and the active render backend. */
+    public static void glDispatchCompute(int x, int y, int z) { rejectExitCapture(); RENDER_BACKEND.dispatchCompute(x, y, z); }
 
+    /** Handles glGetUniformLocation through tracked GL state and the active render backend. */
     public static int glGetUniformLocation(int program, CharSequence name) {
+        rejectExitCapture();
         int loc = RENDER_BACKEND.getUniformLocation(program, name);
         if (loc == -1 && TEXTURE.contentEquals(name)) {
             loc = RENDER_BACKEND.getUniformLocation(program, TEXTURE_RENAMED);
@@ -8782,7 +9942,9 @@ public class GLStateManager {
         return loc;
     }
 
+    /** Handles glGetUniformLocation through tracked GL state and the active render backend. */
     public static int glGetUniformLocation(int program, ByteBuffer name) {
+        rejectExitCapture();
         int loc = RENDER_BACKEND.getUniformLocation(program, name);
         if (loc == -1 && isTextureBuffer(name)) {
             loc = RENDER_BACKEND.getUniformLocation(program, TEXTURE_RENAMED);
@@ -8790,7 +9952,9 @@ public class GLStateManager {
         return loc;
     }
 
+    /** Handles glGetAttribLocation through tracked GL state and the active render backend. */
     public static int glGetAttribLocation(int program, CharSequence name) {
+        rejectExitCapture();
         int loc = RENDER_BACKEND.getAttribLocation(program, name);
         if (loc == -1 && TEXTURE.contentEquals(name)) {
             loc = RENDER_BACKEND.getAttribLocation(program, TEXTURE_RENAMED);
@@ -8798,7 +9962,9 @@ public class GLStateManager {
         return loc;
     }
 
+    /** Handles glGetAttribLocation through tracked GL state and the active render backend. */
     public static int glGetAttribLocation(int program, ByteBuffer name) {
+        rejectExitCapture();
         int loc = RENDER_BACKEND.getAttribLocation(program, name);
         if (loc == -1 && isTextureBuffer(name)) {
             loc = RENDER_BACKEND.getAttribLocation(program, TEXTURE_RENAMED);
@@ -8816,7 +9982,9 @@ public class GLStateManager {
         return buf.slice(buf.position(), 7).equals(TEXTURE_BYTES);
     }
 
+    /** Handles glDeleteObjectARB through tracked GL state and the active render backend. */
     public static void glDeleteObjectARB(int obj) {
+        rejectExitCapture();
         if (RENDER_BACKEND.isShader(obj)) {
             RENDER_BACKEND.deleteShader(obj);
         } else {
@@ -8824,11 +9992,15 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glGetHandleARB through tracked GL state and the active render backend. */
     public static int glGetHandleARB(int pname) {
+        rejectExitCapture();
         return pname == ARBShaderObjects.GL_PROGRAM_OBJECT_ARB ? glGetInteger(GL20.GL_CURRENT_PROGRAM) : RENDER_BACKEND.getInteger(pname);
     }
 
+    /** Handles glGetObjectParameterARB through tracked GL state and the active render backend. */
     public static void glGetObjectParameterARB(int obj, int pname, IntBuffer params) {
+        rejectExitCapture();
         final var backend = RENDER_BACKEND;
         if (backend.isShader(obj)) {
             params.put(params.position(), backend.getShaderi(obj, pname));
@@ -8837,22 +10009,30 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glGetObjectParameterARB through tracked GL state and the active render backend. */
     public static void glGetObjectParameterARB(int obj, int pname, FloatBuffer params) {
+        rejectExitCapture();
         final var backend = RENDER_BACKEND;
         params.put(params.position(), (float) (backend.isShader(obj) ? backend.getShaderi(obj, pname) : backend.getProgrami(obj, pname)));
     }
 
+    /** Handles glGetObjectParameteriARB through tracked GL state and the active render backend. */
     public static int glGetObjectParameteriARB(int obj, int pname) {
+        rejectExitCapture();
         final var backend = RENDER_BACKEND;
         return backend.isShader(obj) ? backend.getShaderi(obj, pname) : backend.getProgrami(obj, pname);
     }
 
+    /** Handles glGetInfoLogARB through tracked GL state and the active render backend. */
     public static String glGetInfoLogARB(int obj, int maxLength) {
+        rejectExitCapture();
         final var backend = RENDER_BACKEND;
         return backend.isShader(obj) ? backend.getShaderInfoLog(obj, maxLength) : backend.getProgramInfoLog(obj, maxLength);
     }
 
+    /** Handles glGetInfoLogARB through tracked GL state and the active render backend. */
     public static void glGetInfoLogARB(int obj, IntBuffer length, ByteBuffer infoLog) {
+        rejectExitCapture();
         final var backend = RENDER_BACKEND;
         if (backend.isShader(obj)) {
             backend.getShaderInfoLog(obj, length, infoLog);
@@ -8861,117 +10041,175 @@ public class GLStateManager {
         }
     }
 
+    /** Handles glUniform1f through tracked GL state and the active render backend. */
     public static void glUniform1f(int location, float v0) {
+        rejectExitCapture();
         RENDER_BACKEND.uniform1f(location, v0);
     }
 
+    /** Handles glUniform2f through tracked GL state and the active render backend. */
     public static void glUniform2f(int location, float v0, float v1) {
+        rejectExitCapture();
         RENDER_BACKEND.uniform2f(location, v0, v1);
     }
 
+    /** Handles glUniform3f through tracked GL state and the active render backend. */
     public static void glUniform3f(int location, float v0, float v1, float v2) {
+        rejectExitCapture();
         RENDER_BACKEND.uniform3f(location, v0, v1, v2);
     }
 
+    /** Handles glUniform4f through tracked GL state and the active render backend. */
     public static void glUniform4f(int location, float v0, float v1, float v2, float v3) {
+        rejectExitCapture();
         RENDER_BACKEND.uniform4f(location, v0, v1, v2, v3);
     }
 
+    /** Handles glUniform1i through tracked GL state and the active render backend. */
     public static void glUniform1i(int location, int v0) {
+        rejectExitCapture();
         RENDER_BACKEND.uniform1i(location, v0);
     }
 
+    /** Handles glUniform2i through tracked GL state and the active render backend. */
     public static void glUniform2i(int location, int v0, int v1) {
+        rejectExitCapture();
         RENDER_BACKEND.uniform2i(location, v0, v1);
     }
 
+    /** Handles glUniform3i through tracked GL state and the active render backend. */
     public static void glUniform3i(int location, int v0, int v1, int v2) {
+        rejectExitCapture();
         RENDER_BACKEND.uniform3i(location, v0, v1, v2);
     }
 
+    /** Handles glUniform4i through tracked GL state and the active render backend. */
     public static void glUniform4i(int location, int v0, int v1, int v2, int v3) {
+        rejectExitCapture();
         RENDER_BACKEND.uniform4i(location, v0, v1, v2, v3);
     }
 
+    /** Handles glUniform1 through tracked GL state and the active render backend. */
     public static void glUniform1(int location, FloatBuffer values) {
+        rejectExitCapture();
         RENDER_BACKEND.uniform1fv(location, values);
     }
 
+    /** Handles glUniform1 through tracked GL state and the active render backend. */
     public static void glUniform1(int location, IntBuffer values) {
+        rejectExitCapture();
         RENDER_BACKEND.uniform1iv(location, values);
     }
 
+    /** Handles glUniform2 through tracked GL state and the active render backend. */
     public static void glUniform2(int location, FloatBuffer values) {
+        rejectExitCapture();
         RENDER_BACKEND.uniform2(location, values);
     }
 
+    /** Handles glUniform2 through tracked GL state and the active render backend. */
     public static void glUniform2(int location, IntBuffer values) {
+        rejectExitCapture();
         RENDER_BACKEND.uniform2iv(location, values);
     }
 
+    /** Handles glUniform3 through tracked GL state and the active render backend. */
     public static void glUniform3(int location, FloatBuffer values) {
+        rejectExitCapture();
         RENDER_BACKEND.uniform3(location, values);
     }
 
+    /** Handles glUniform3 through tracked GL state and the active render backend. */
     public static void glUniform3(int location, IntBuffer values) {
+        rejectExitCapture();
         RENDER_BACKEND.uniform3iv(location, values);
     }
 
+    /** Handles glUniform4 through tracked GL state and the active render backend. */
     public static void glUniform4(int location, FloatBuffer values) {
+        rejectExitCapture();
         RENDER_BACKEND.uniform4(location, values);
     }
 
+    /** Handles glUniform4 through tracked GL state and the active render backend. */
     public static void glUniform4(int location, IntBuffer values) {
+        rejectExitCapture();
         RENDER_BACKEND.uniform4iv(location, values);
     }
 
+    /** Handles glUniformMatrix2 through tracked GL state and the active render backend. */
     public static void glUniformMatrix2(int location, boolean transpose, FloatBuffer matrices) {
+        rejectExitCapture();
         RENDER_BACKEND.uniformMatrix2(location, transpose, matrices);
     }
 
+    /** Handles glUniformMatrix3 through tracked GL state and the active render backend. */
     public static void glUniformMatrix3(int location, boolean transpose, FloatBuffer matrices) {
+        rejectExitCapture();
         RENDER_BACKEND.uniformMatrix3(location, transpose, matrices);
     }
 
+    /** Handles glUniformMatrix4 through tracked GL state and the active render backend. */
     public static void glUniformMatrix4(int location, boolean transpose, FloatBuffer matrices) {
+        rejectExitCapture();
         RENDER_BACKEND.uniformMatrix4(location, transpose, matrices);
     }
 
+    /** Handles glGetActiveUniform through tracked GL state and the active render backend. */
     public static void glGetActiveUniform(int program, int index, IntBuffer length, IntBuffer size, IntBuffer type, ByteBuffer name) {
+        rejectExitCapture();
         RENDER_BACKEND.getActiveUniform(program, index, length, size, type, name);
     }
 
+    /** Handles glGetActiveAttrib through tracked GL state and the active render backend. */
     public static void glGetActiveAttrib(int program, int index, IntBuffer length, IntBuffer size, IntBuffer type, ByteBuffer name) {
+        rejectExitCapture();
         RENDER_BACKEND.getActiveAttrib(program, index, length, size, type, name);
     }
 
+    /** Handles glGetActiveAttrib through tracked GL state and the active render backend. */
     public static String glGetActiveAttrib(int program, int index, int maxLength, IntBuffer sizeType) {
+        rejectExitCapture();
         return RENDER_BACKEND.getActiveAttrib(program, index, maxLength, sizeType);
     }
 
+    /** Handles glGetAttachedShaders through tracked GL state and the active render backend. */
     public static void glGetAttachedShaders(int program, IntBuffer count, IntBuffer shaders) {
+        rejectExitCapture();
         RENDER_BACKEND.getAttachedShaders(program, count, shaders);
     }
 
+    /** Handles glGetShaderSource through tracked GL state and the active render backend. */
     public static String glGetShaderSource(int shader, int maxLength) {
+        rejectExitCapture();
         return RENDER_BACKEND.getShaderSource(shader, maxLength);
     }
 
+    /** Handles glGetShaderSource through tracked GL state and the active render backend. */
     public static void glGetShaderSource(int shader, IntBuffer length, ByteBuffer source) {
+        rejectExitCapture();
         RENDER_BACKEND.getShaderSource(shader, length, source);
     }
 
+    /** Handles glGetUniform through tracked GL state and the active render backend. */
     public static void glGetUniform(int program, int location, FloatBuffer params) {
+        rejectExitCapture();
         RENDER_BACKEND.getUniformfv(program, location, params);
     }
 
+    /** Handles glGetUniform through tracked GL state and the active render backend. */
     public static void glGetUniform(int program, int location, IntBuffer params) {
+        rejectExitCapture();
         RENDER_BACKEND.getUniformiv(program, location, params);
     }
+    /** Handles glGetTexImage through tracked GL state and the active render backend. */
     public static void glGetTexImage(int target, int level, int format, int type, long pixels) {
+        rejectExitCapture();
         RENDER_BACKEND.getTexImage(target, level, format, type, pixels);
     }
+    /** Handles glReadPixels through tracked GL state and the active render backend. */
     public static void glReadPixels(int x, int y, int width, int height, int format, int type, long pixels) {
+        rejectExitCapture();
         RENDER_BACKEND.readPixels(x, y, width, height, format, remapPixelTypeForGLES(format, type), pixels);
     }
 
@@ -9401,7 +10639,9 @@ public class GLStateManager {
         out.rescaleNormal = glCtx.rescaleNormalState.isEnabled();
     }
 
+    /** Applies lighting for GLStateManager. */
     public static void applyLighting(LightingSnapshot in) {
+        rejectExitCapture();
         final GLContextState glCtx = ctx();
         boolean changed = false;
         for (int i = 0; i < in.lights.length; i++) {

@@ -192,7 +192,7 @@ class PacerCoreSimTest {
     private static final class Sim {
         long refreshPeriod = P60;
         long displayPeriod;
-        boolean tearFree = true;
+        boolean fifo = true;
         boolean vsyncOn = true;
         int cap;
         Mode mode = Mode.FIFO;
@@ -259,13 +259,14 @@ class PacerCoreSimTest {
         }
     }
 
+    /** Returns the run result for PacerCoreSimTest. */
     private static Result run(Sim sim) {
         final PacerTestClock clock = new PacerTestClock();
         final FakeSleeper parker = new FakeSleeper(clock, sim.granularity);
         final PacerSleeper sleeper = new PacerSleeper(clock.clock(), parker, false);
         final PacerCore core = new PacerCore(clock.clock(), sleeper);
         core.setRefreshPeriodNanos(sim.refreshPeriod);
-        core.setTearFree(sim.tearFree);
+        core.setFifo(sim.fifo);
         core.setVsyncOn(sim.vsyncOn);
         core.setCap(sim.cap);
 
@@ -374,6 +375,18 @@ class PacerCoreSimTest {
         sim.work = work;
         sim.queue = queue;
         sim.gate = gate;
+        return sim;
+    }
+
+    /** Returns the tearing sim result for PacerCoreSimTest. */
+    private static Sim tearingSim(String name, int cap) {
+        final Sim sim = new Sim().named(name);
+        sim.fifo = false;
+        sim.vsyncOn = false;
+        sim.mode = Mode.IMMEDIATE;
+        sim.gate = Gate.NONE;
+        sim.cap = cap;
+        sim.gpuTail = 200 * US;
         return sim;
     }
 
@@ -492,31 +505,30 @@ class PacerCoreSimTest {
         assertTrue(Math.abs(r.meanInterval - 3 * P144) < 300 * US, r.toString());
     }
 
+    /** Verifies mailbox renders past the refresh rate and shows the newest frame. */
     @Test
-    void mailboxIsPacedToTheRefreshRateInsteadOfBeatingAgainstIt() {
+    void mailboxRendersPastTheRefreshRateAndShowsTheNewestFrame() {
         final Sim sim = new Sim().named("mailbox144");
         sim.refreshPeriod = P144;
         sim.mode = Mode.MAILBOX;
         sim.gate = Gate.SWAP;
+        sim.fifo = false;
         sim.vsyncOn = false;
         sim.work = 3 * MS;
         sim.gpuTail = MS;
         final Result r = run(sim);
 
-        assertTrue(r.dropped <= 1, r + " must not drop presents it paid to render");
-        assertTrue(r.intervalSd < 200 * US, r.toString());
+        assertEquals(0L, r.cadence, r + " mailbox must not be capped");
+        assertTrue(r.meanInterval < P144 * 3 / 4, r + " must render past the refresh rate");
+        assertEquals(0, r.repeats, r + " must have a fresh frame for every vblank");
+        assertTrue(r.dropped > 0, r + " surplus frames are replaced in the mailbox");
     }
 
+    /** Verifies a tearing cap holds its period and keeps latency to one frame of work. */
     @Test
     void aTearingCapHoldsItsPeriodAndKeepsLatencyToOneFrameOfWork() {
-        final Sim sim = new Sim().named("vsyncOff cap100");
-        sim.tearFree = false;
-        sim.vsyncOn = false;
-        sim.mode = Mode.IMMEDIATE;
-        sim.gate = Gate.NONE;
-        sim.cap = 100;
+        final Sim sim = tearingSim("vsyncOff cap100", 100);
         sim.work = 4 * MS;
-        sim.gpuTail = 200 * US;
         final Result r = run(sim);
 
         assertTrue(Math.abs(r.minInterval - 10 * MS) < 200 * US, r.toString());
@@ -525,16 +537,11 @@ class PacerCoreSimTest {
         assertTrue(r.latencyP99 <= sim.work + r.margin + MS, r.toString());
     }
 
+    /** Verifies a frame slower than the cadence is never slept on. */
     @Test
     void aFrameSlowerThanTheCadenceIsNeverSleptOn() {
-        final Sim sim = new Sim().named("cpuBound R=20ms cap60");
-        sim.tearFree = false;
-        sim.vsyncOn = false;
-        sim.mode = Mode.IMMEDIATE;
-        sim.gate = Gate.NONE;
-        sim.cap = 60;
+        final Sim sim = tearingSim("cpuBound R=20ms cap60", 60);
         sim.work = 20 * MS;
-        sim.gpuTail = 200 * US;
         final Result r = run(sim);
 
         assertEquals(0, r.startParks, r.toString());
@@ -542,16 +549,11 @@ class PacerCoreSimTest {
         assertEquals(20 * MS, r.maxInterval, r.toString());
     }
 
+    /** Verifies a coarse sleep timer widens the margin without saturating it. */
     @Test
     void aCoarseSleepTimerWidensTheMarginWithoutSaturatingIt() {
-        final Sim sim = new Sim().named("coarseTimer cap60");
-        sim.tearFree = false;
-        sim.vsyncOn = false;
-        sim.mode = Mode.IMMEDIATE;
-        sim.gate = Gate.NONE;
-        sim.cap = 60;
+        final Sim sim = tearingSim("coarseTimer cap60", 60);
         sim.granularity = 4 * MS;
-        sim.gpuTail = 200 * US;
         final Result r = run(sim);
 
         assertTrue(r.margin > PacerCore.MARGIN_MIN_NANOS, r + " a coarse timer must buy extra lead");

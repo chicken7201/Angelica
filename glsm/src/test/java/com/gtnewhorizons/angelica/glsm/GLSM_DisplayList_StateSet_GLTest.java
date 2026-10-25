@@ -48,12 +48,28 @@ public class GLSM_DisplayList_StateSet_GLTest {
         return id;
     }
 
+    /** Records cutout bracket for GLSM_DisplayList_StateSet_GLTest. */
+    private int recordCutoutBracket(int mode) {
+        final int list = newList();
+        GLStateManager.glNewList(list, mode);
+        final int d = GLStateManager.pushState(StateSet.CUTOUT);
+        GLStateManager.enableAlphaTest();
+        GLStateManager.glAlphaFunc(GL11.GL_GREATER, 0.1f);
+        GLStateManager.glActiveTexture(GL13.GL_TEXTURE1);
+        GLStateManager.enableTexture();
+        GLStateManager.glActiveTexture(GL13.GL_TEXTURE0);
+        GLStateManager.popStateTo(d);
+        GLStateManager.glEndList();
+        return list;
+    }
+
     private static Int2IntMap commandCounts(int listId) {
         final CompiledDisplayList compiled = DisplayListManager.getDisplayList(listId);
         assertNotNull(compiled, "compiled display list must exist for id " + listId);
         return compiled.getCommandCounts();
     }
 
+    /** Verifies compile bracket does not throw and leaves live state untouched. */
     @Test
     void compileBracketDoesNotThrowAndLeavesLiveStateUntouched() {
         GLStateManager.enableAlphaTest();
@@ -65,16 +81,7 @@ public class GLSM_DisplayList_StateSet_GLTest {
         final int unit0 = GLStateManager.getActiveTextureUnit();
         final int depth0 = GLStateManager.getAttribDepth();
 
-        final int list = newList();
-        GLStateManager.glNewList(list, GL11.GL_COMPILE);
-        final int d = GLStateManager.pushState(StateSet.CUTOUT);
-        GLStateManager.enableAlphaTest();
-        GLStateManager.glAlphaFunc(GL11.GL_GREATER, 0.1f);
-        GLStateManager.glActiveTexture(GL13.GL_TEXTURE1);
-        GLStateManager.enableTexture();
-        GLStateManager.glActiveTexture(GL13.GL_TEXTURE0);
-        GLStateManager.popStateTo(d);
-        GLStateManager.glEndList();
+        final int list = recordCutoutBracket(GL11.GL_COMPILE);
 
         verifyIsEnabled(GL11.GL_ALPHA_TEST, true, "cache alpha test enable unchanged after COMPILE-only bracket");
         assertEquals(func0, GLStateManager.getAlphaState().getFunction(), "cache alpha func unchanged after COMPILE-only bracket");
@@ -84,18 +91,10 @@ public class GLSM_DisplayList_StateSet_GLTest {
         assertEquals(2, commandCounts(list).getOrDefault(GLCommand.COMPLEX_REF, 0), "push and pop each record one COMPLEX_REF");
     }
 
+    /** Verifies compiled bracket replay restores state. */
     @Test
     void compiledBracketReplayRestoresState() {
-        final int list = newList();
-        GLStateManager.glNewList(list, GL11.GL_COMPILE);
-        final int d = GLStateManager.pushState(StateSet.CUTOUT);
-        GLStateManager.enableAlphaTest();
-        GLStateManager.glAlphaFunc(GL11.GL_GREATER, 0.1f);
-        GLStateManager.glActiveTexture(GL13.GL_TEXTURE1);
-        GLStateManager.enableTexture();
-        GLStateManager.glActiveTexture(GL13.GL_TEXTURE0);
-        GLStateManager.popStateTo(d);
-        GLStateManager.glEndList();
+        final int list = recordCutoutBracket(GL11.GL_COMPILE);
 
         GLStateManager.glAlphaFunc(GL11.GL_LESS, 0.9f);
         GLStateManager.disableAlphaTest();
@@ -112,6 +111,7 @@ public class GLSM_DisplayList_StateSet_GLTest {
         assertEquals(depth0, GLStateManager.getAttribDepth(), "live attrib depth unchanged by balanced replay");
     }
 
+    /** Verifies compile and execute bracket is balanced. */
     @Test
     void compileAndExecuteBracketIsBalanced() {
         GLStateManager.glAlphaFunc(GL11.GL_LESS, 0.9f);
@@ -119,21 +119,13 @@ public class GLSM_DisplayList_StateSet_GLTest {
         GLStateManager.glActiveTexture(GL13.GL_TEXTURE0);
         final int depth0 = GLStateManager.getAttribDepth();
 
-        final int list = newList();
-        GLStateManager.glNewList(list, GL11.GL_COMPILE_AND_EXECUTE);
-        final int d = GLStateManager.pushState(StateSet.CUTOUT);
-        GLStateManager.enableAlphaTest();
-        GLStateManager.glAlphaFunc(GL11.GL_GREATER, 0.1f);
-        GLStateManager.glActiveTexture(GL13.GL_TEXTURE1);
-        GLStateManager.enableTexture();
-        GLStateManager.glActiveTexture(GL13.GL_TEXTURE0);
-        GLStateManager.popStateTo(d);
-        GLStateManager.glEndList();
+        final int list = recordCutoutBracket(GL11.GL_COMPILE_AND_EXECUTE);
 
         assertEquals(GL11.GL_LESS, GLStateManager.getAlphaState().getFunction(), "cache alpha func restored after GL_COMPILE_AND_EXECUTE bracket");
         assertEquals(0.9f, GLStateManager.getAlphaState().getReference(), 0.0001f, "cache alpha ref restored after GL_COMPILE_AND_EXECUTE bracket");
         verifyIsEnabled(GL11.GL_ALPHA_TEST, false, "cache alpha test restored disabled after GL_COMPILE_AND_EXECUTE bracket");
         assertEquals(0, GLStateManager.getActiveTextureUnit(), "cache active unit restored after GL_COMPILE_AND_EXECUTE bracket");
+        assertEquals(GL13.GL_TEXTURE0, GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE), "driver active unit restored after GL_COMPILE_AND_EXECUTE bracket");
         assertEquals(depth0, GLStateManager.getAttribDepth(), "live attrib depth unchanged after balanced GL_COMPILE_AND_EXECUTE bracket");
 
         GLStateManager.glCallList(list);
@@ -143,6 +135,7 @@ public class GLSM_DisplayList_StateSet_GLTest {
         assertEquals(0.9f, GLStateManager.getAlphaState().getReference(), 0.0001f, "cache alpha ref restored after replay");
         verifyIsEnabled(GL11.GL_ALPHA_TEST, false, "cache alpha test restored disabled after replay");
         assertEquals(0, GLStateManager.getActiveTextureUnit(), "cache active unit restored after replay");
+        assertEquals(GL13.GL_TEXTURE0, GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE), "driver active unit restored after replay");
         assertEquals(depth0, GLStateManager.getAttribDepth(), "live attrib depth unchanged after replay");
     }
 

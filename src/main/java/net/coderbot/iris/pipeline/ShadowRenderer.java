@@ -9,6 +9,7 @@ import com.gtnewhorizons.angelica.glsm.GLDebug;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.profiling.Tracy;
 import com.gtnewhorizons.angelica.profiling.RenderClassTimings;
+import com.gtnewhorizons.angelica.rendering.tesr.EntityShadowReplay;
 import com.gtnewhorizons.angelica.rendering.tesr.ModelPartBatcher;
 import com.gtnewhorizons.angelica.rendering.tesr.PendingTesrDraws;
 import com.gtnewhorizons.angelica.rendering.tesr.SectionBuiltBlockEntity;
@@ -560,6 +561,7 @@ public class ShadowRenderer {
 		targets.copyPreTranslucentDepth();
 	}
 
+	/** Renders entities for ShadowRenderer. */
 	private void renderEntities(EntityRenderer levelRenderer, Frustrum frustum, Object bufferSource, MatrixStack modelView, double cameraX, double cameraY, double cameraZ, float tickDelta) {
 		profiler.startSection("iris_shadow_cull");
 
@@ -590,9 +592,12 @@ public class ShadowRenderer {
 			}
 			for (Entity entity : renderedEntitiesList) {
 				final long start = Tracy.ENABLED ? System.nanoTime() : 0L;
+				final boolean recording = AngelicaConfig.entityShadowReplayEnabled() && EntityShadowReplay.beginEntity(entity, tickDelta);
+				boolean completed = false;
 				try {
-					RenderManager.instance.renderEntitySimple(entity, tickDelta);
+					completed = RenderManager.instance.renderEntitySimple(entity, tickDelta);
 				} finally {
+					if (recording) EntityShadowReplay.endEntity(completed);
 					if (Tracy.ENABLED) RenderClassTimings.SHADOW_ENTITY.add(entity.getClass(), System.nanoTime() - start);
 				}
 			}
@@ -860,6 +865,7 @@ public class ShadowRenderer {
 		profiler.endSection();
 	}
 
+	/** Renders shadows for ShadowRenderer. */
 	public void renderShadows(EntityRenderer levelRenderer, Camera playerCamera) {
         final Minecraft mc = Minecraft.getMinecraft();
         final RenderGlobal rg = mc.renderGlobal;
@@ -1000,6 +1006,12 @@ public class ShadowRenderer {
 		}
 
 		profiler.endStartSection("iris_shadow_entities");
+		TileEntityRendererDispatcher.instance.cacheActiveRenderInfo(mc.theWorld, mc.getTextureManager(), mc.fontRenderer, mc.renderViewEntity, tickDelta);
+		RenderManager.instance.cacheActiveRenderInfo(mc.theWorld, mc.getTextureManager(), mc.fontRenderer, mc.renderViewEntity, mc.pointedEntity, mc.gameSettings, tickDelta);
+		final Entity viewer = mc.renderViewEntity;
+		TileEntityRendererDispatcher.staticPlayerX = viewer.lastTickPosX + (viewer.posX - viewer.lastTickPosX) * tickDelta;
+		TileEntityRendererDispatcher.staticPlayerY = viewer.lastTickPosY + (viewer.posY - viewer.lastTickPosY) * tickDelta;
+		TileEntityRendererDispatcher.staticPlayerZ = viewer.lastTickPosZ + (viewer.posZ - viewer.lastTickPosZ) * tickDelta;
 		final Frustrum entityShadowFrustum = createEntityShadowFrustum(entityX, entityY, entityZ);
 		applyEntityShadowViewport(entityShadowFrustum);
 		try (GLDebug.Scope s = GLDebug.scope("shadow:entities")) {

@@ -78,11 +78,10 @@ class ItemCutoutLightmapGLTest {
         ShaderManager.getInstance().activate();
     }
 
-    /** Restores the caller's state and deletes only resources allocated by this test. */
+    /** Restores caller state and owned resources while leaving FFP enabled for the shared core fixture. */
     @AfterEach
     void cleanup() {
         ShaderManager.getInstance().deactivate();
-        ShaderManager.disable();
         GLStateManager.glBindVertexArray(0);
         if (vbo != 0) GLStateManager.glDeleteBuffers(vbo);
         if (vao != 0) GLStateManager.glDeleteVertexArrays(vao);

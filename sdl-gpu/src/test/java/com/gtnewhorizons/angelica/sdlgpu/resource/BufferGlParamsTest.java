@@ -11,14 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class BufferGlParamsTest {
 
-    @Test
-    void unknownBuffer_reportsGlDefaults() {
-        final ResourceManager rm = SdlTestRig.resourceManager();
-        assertEquals(GL15.GL_STATIC_DRAW, rm.getBufferGlUsage(4242));
-        assertEquals(BufferParams.MUTABLE_STORE, rm.getBufferStorageFlags(4242));
-        assertEquals(0L, rm.getBufferSize(4242));
-    }
-
+    /** Verifies recorded params round trip. */
     @Test
     void recordedParams_roundTrip() {
         final ResourceManager rm = SdlTestRig.resourceManager();
@@ -30,15 +23,10 @@ class BufferGlParamsTest {
         rm.recordBufferGlParams(2, GL15.GL_DYNAMIC_DRAW, flags);
         assertEquals(GL15.GL_DYNAMIC_DRAW, rm.getBufferGlUsage(2));
         assertEquals(flags, rm.getBufferStorageFlags(2));
-    }
 
-    @Test
-    void recordedParams_overwrittenOnRespecification() {
-        final ResourceManager rm = SdlTestRig.resourceManager();
-        rm.recordBufferGlParams(3, GL15.GL_DYNAMIC_DRAW, GL30.GL_MAP_WRITE_BIT);
-        rm.recordBufferGlParams(3, GL15.GL_STATIC_DRAW, BufferParams.MUTABLE_STORE);
-        assertEquals(GL15.GL_STATIC_DRAW, rm.getBufferGlUsage(3));
-        assertEquals(BufferParams.MUTABLE_STORE, rm.getBufferStorageFlags(3));
+        rm.recordBufferGlParams(2, GL15.GL_STATIC_DRAW, BufferParams.MUTABLE_STORE);
+        assertEquals(GL15.GL_STATIC_DRAW, rm.getBufferGlUsage(2));
+        assertEquals(BufferParams.MUTABLE_STORE, rm.getBufferStorageFlags(2));
     }
 
     @Test

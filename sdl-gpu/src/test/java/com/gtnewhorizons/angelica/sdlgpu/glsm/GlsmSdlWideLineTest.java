@@ -151,15 +151,12 @@ class GlsmSdlWideLineTest {
         return litRowsInColumn(pixels, x, 0, SIZE);
     }
 
+    /** Verifies wide line covers its first pixel but not its last. */
     @Test
     void wideLineCoversItsFirstPixelButNotItsLast() {
         final float y = pixelCenter(16);
         GLStateManager.glLineWidth(2.0f);
-        GLStateManager.glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
-        GLStateManager.glBegin(GL11.GL_LINES);
-        GLStateManager.glVertex3f(pixelCenter(40), y, 0.0f);
-        GLStateManager.glVertex3f(pixelCenter(20), y, 0.0f);
-        GLStateManager.glEnd();
+        line(new float[] { pixelCenter(40), y, 0.0f }, new float[] { pixelCenter(20), y, 0.0f });
 
         final int[] pixels = GlsmSdlHeadlessRig.readTarget();
         assertEquals(2, litInColumn(pixels, 40), "first pixel of a right-to-left line");

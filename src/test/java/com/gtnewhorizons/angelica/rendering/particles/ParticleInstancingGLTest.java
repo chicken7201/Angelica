@@ -605,14 +605,20 @@ class ParticleInstancingGLTest {
         capture.addVertexWithUV(1.0, 0.0, 0.0, 1.0, 1.0);
     }
 
-    @Test
-    void aSecondQuadAfterASelfDrawSpillsIntoItsOwnBatchWhenTheRunIsNotDrawing() {
-        final RecordingTessellator run = new RecordingTessellator();
+    /** Returns the captured quad result for ParticleInstancingGLTest. */
+    private static ParticleCaptureTessellator capturedQuad(RecordingTessellator run) {
         final ParticleCaptureTessellator capture = new ParticleCaptureTessellator();
-
         capture.begin(100, run, GLStateManager.getModelViewMatrix());
         capture.setColorRGBA(5, 6, 7, 8);
         feedQuad(capture);
+        return capture;
+    }
+
+    /** Verifies a second quad after a self draw spills into its own batch when the run is not drawing. */
+    @Test
+    void aSecondQuadAfterASelfDrawSpillsIntoItsOwnBatchWhenTheRunIsNotDrawing() {
+        final RecordingTessellator run = new RecordingTessellator();
+        final ParticleCaptureTessellator capture = capturedQuad(run);
         capture.draw();
         run.log.clear();
 
@@ -627,14 +633,11 @@ class ParticleInstancingGLTest {
         assertFalse(run.isDrawing, "a run that was not drawing must be left not drawing");
     }
 
+    /** Verifies a closed spill replays in the same order. */
     @Test
     void aClosedSpillReplaysInTheSameOrder() {
         final RecordingTessellator run = new RecordingTessellator();
-        final ParticleCaptureTessellator capture = new ParticleCaptureTessellator();
-
-        capture.begin(100, run, GLStateManager.getModelViewMatrix());
-        capture.setColorRGBA(5, 6, 7, 8);
-        feedQuad(capture);
+        final ParticleCaptureTessellator capture = capturedQuad(run);
         capture.draw();
         run.isDrawing = true;
         run.log.clear();
@@ -655,14 +658,11 @@ class ParticleInstancingGLTest {
         assertEquals(expected, run.log);
     }
 
+    /** Verifies a fifth vertex spills and forwards remaining calls to run. */
     @Test
     void aFifthVertexSpillsAndForwardsRemainingCallsToRun() {
         final RecordingTessellator run = new RecordingTessellator();
-        final ParticleCaptureTessellator capture = new ParticleCaptureTessellator();
-
-        capture.begin(100, run, GLStateManager.getModelViewMatrix());
-        capture.setColorRGBA(5, 6, 7, 8);
-        feedQuad(capture);
+        final ParticleCaptureTessellator capture = capturedQuad(run);
         assertFalse(capture.spilled());
 
         capture.addVertexWithUV(2.0, 2.0, 0.0, 0.5, 0.5);

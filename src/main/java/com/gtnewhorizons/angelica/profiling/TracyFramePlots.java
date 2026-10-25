@@ -7,6 +7,7 @@ import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.ffp.ShaderManager;
 import com.gtnewhorizons.angelica.glsm.profiling.Tracy;
 import com.gtnewhorizons.angelica.glsm.profiling.TracyBackend;
+import com.gtnewhorizons.angelica.glsm.streaming.PersistentStreamingBuffer;
 import com.gtnewhorizons.angelica.glsm.streaming.TessellatorStreamingDrawer;
 import com.gtnewhorizons.angelica.rendering.AngelicaRenderQueue;
 import com.gtnewhorizons.angelica.rendering.FramePacer;
@@ -19,6 +20,7 @@ import com.gtnewhorizons.angelica.rendering.particles.ParticleInstancer;
 import com.gtnewhorizons.angelica.rendering.tesr.AngelicaTesrMeshCache;
 import com.gtnewhorizons.angelica.rendering.tesr.ModelPartBatcher;
 import com.gtnewhorizons.angelica.rendering.tesr.TesrBatchRenderer;
+import com.gtnewhorizons.angelica.rendering.tesr.TesrShaderPrograms;
 import net.coderbot.iris.pipeline.ShadowRenderer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.WorldRenderer;
@@ -33,6 +35,7 @@ public final class TracyFramePlots {
     private static final PlotDelta P_GL_DRAW_CALLS = new PlotDelta("gl.drawCalls");
     private static final PlotDelta P_GL_TEX_BIND_MISSES = new PlotDelta("gl.texBindMisses");
     private static final PlotDelta P_GL_PROGRAM_SWITCHES = new PlotDelta("gl.programSwitches");
+    private static final long P_GL_TEX_AWAITING_RELEASE = Tracy.plotHandle("gl.texAwaitingRelease");
     private static final PlotDelta P_GLSM_BRACKETS = new PlotDelta("glsm.brackets");
     private static final PlotDelta P_GLSM_COW_SLOTS = new PlotDelta("glsm.cowSlots");
     private static final PlotDelta P_GLSM_POP_RESTORES = new PlotDelta("glsm.popRestores");
@@ -44,6 +47,7 @@ public final class TracyFramePlots {
     private static final PlotDelta P_GL_ORPHAN_FALLBACKS = new PlotDelta("gl.orphanFallbacks");
     private static final PlotDelta P_GL_STREAM_CONTIGUOUS = new PlotDelta("gl.streamContiguous");
     private static final PlotDelta P_GL_RING_WRAPS = new PlotDelta("gl.ringWraps");
+    private static final PlotDelta P_GL_ALL_RING_FENCES = new PlotDelta("gl.allRingFences");
     private static final long P_GL_SECTION_META_BYTES = Tracy.plotHandle("gl.sectionMetaBytes", TracyBackend.PLOT_FORMAT_MEMORY);
 
     private static final long P_SHADOW_RELAY_FRAMES = Tracy.plotHandle("shadow.relayFrames");
@@ -76,7 +80,7 @@ public final class TracyFramePlots {
     private static final long P_FFP_PROGRAMS = Tracy.plotHandle("ffp.programs");
     private static final PlotDelta P_FFP_VARIANT_SWITCHES = new PlotDelta("ffp.variantSwitches");
 
-    private static final PlotDelta P_TESR_REBUILDS = new PlotDelta("tesr.rebuilds");
+    private static final PlotDelta P_TESR_REBAKES = new PlotDelta("tesr.rebakes");
     private static final PlotDelta P_TESR_RETAINED_DRAWS = new PlotDelta("tesr.retainedDraws");
     private static final PlotDelta P_TESR_INSTANCED_DRAWS = new PlotDelta("tesr.instancedDraws");
     private static final PlotDelta P_TESR_INSTANCED_INSTANCES = new PlotDelta("tesr.instancedInstances");
@@ -88,6 +92,10 @@ public final class TracyFramePlots {
     private static final long P_TESR_BUFFER_SOURCE_BYTES = Tracy.plotHandle("tesr.bufferSourceBytes", TracyBackend.PLOT_FORMAT_MEMORY);
     private static final PlotDelta P_TESR_CACHE_HITS = new PlotDelta("tesr.cacheHits");
     private static final PlotDelta P_TESR_CACHE_MISSES = new PlotDelta("tesr.cacheMisses");
+    private static final PlotDelta P_TESR_SHADER_BAKED_BINDS = new PlotDelta("tesr.shaderBakedBinds");
+    private static final PlotDelta P_TESR_SHADER_INSTANCED_BINDS = new PlotDelta("tesr.shaderInstancedBinds");
+    private static final PlotDelta P_TESR_SHADER_FALLBACKS = new PlotDelta("tesr.shaderFallbacks");
+    private static final PlotDelta P_TESR_SHADER_LINK_FAILURES = new PlotDelta("tesr.shaderLinkFailures");
     private static final PlotDelta P_TESR_MODEL_PARTS = new PlotDelta("tesr.modelParts");
     private static final PlotDelta P_ARMOR_BASE_REUSES = new PlotDelta("glint.armorBaseReuses");
     private static final PlotDelta P_GLINT_PASS_REUSES = new PlotDelta("glint.passReuses");
@@ -150,6 +158,7 @@ public final class TracyFramePlots {
     private static final long P_PACER_PRESENT_INTERVAL_US = Tracy.plotHandle("pacer.presentIntervalUs");
     private static final long P_PACER_IDLE_OVERSHOOT_US = Tracy.plotHandle("pacer.idleOvershootUs");
 
+    /** Updates on frame state for TracyFramePlots. */
     public static void onFrame(Minecraft mc) {
         if (!Tracy.ENABLED) return;
 
@@ -184,6 +193,7 @@ public final class TracyFramePlots {
         P_GL_DRAW_CALLS.plot(GLStateManager.drawCalls);
         P_GL_TEX_BIND_MISSES.plot(GLStateManager.texBindMisses);
         P_GL_PROGRAM_SWITCHES.plot(GLStateManager.programSwitches);
+        Tracy.plotInt(P_GL_TEX_AWAITING_RELEASE, GLStateManager.deferredTexturesAwaitingRelease());
         P_GLSM_BRACKETS.plot(GLStateManager.attribPushes);
         P_GLSM_COW_SLOTS.plot(GLStateManager.attribSlotsSaved);
         P_GLSM_POP_RESTORES.plot(GLStateManager.attribValueRestores);
@@ -195,6 +205,7 @@ public final class TracyFramePlots {
         P_GL_ORPHAN_FALLBACKS.plot(TessellatorStreamingDrawer.orphanFallbacks);
         P_GL_STREAM_CONTIGUOUS.plot(TessellatorStreamingDrawer.streamContiguous);
         P_GL_RING_WRAPS.plot(TessellatorStreamingDrawer.ringWraps());
+        P_GL_ALL_RING_FENCES.plot(PersistentStreamingBuffer.getFencesIssuedByAllRings());
         Tracy.plotInt(P_GL_SECTION_META_BYTES, TerrainDrawStats.takeSectionMetaBytes());
         Tracy.plotInt(P_SHADOW_RELAY_FRAMES, ShadowRenderer.SHADOW_TERRAIN_RELAID ? 1 : 0);
         Tracy.plotInt(P_TERRAIN_DRAW_COMMANDS, TerrainDrawStats.takeCommandsSubmitted());
@@ -227,7 +238,7 @@ public final class TracyFramePlots {
         final TesrBatchRenderer tesr = TesrBatchRenderer.INSTANCE;
         final ModelPartBatcher batcher = ModelPartBatcher.INSTANCE;
 
-        P_TESR_REBUILDS.plot(tesr.statRebuilds());
+        P_TESR_REBAKES.plot(tesr.statRebakes());
         P_TESR_RETAINED_DRAWS.plot(tesr.statRetainedDraws());
         P_TESR_INSTANCED_DRAWS.plot(tesr.statInstancedDraws() + batcher.statInstancedDraws());
         P_TESR_INSTANCED_INSTANCES.plot(tesr.statInstancedInstances() + batcher.statInstancedInstances());
@@ -241,6 +252,10 @@ public final class TracyFramePlots {
         }
         P_TESR_CACHE_HITS.plot(AngelicaTesrMeshCache.cacheHits);
         P_TESR_CACHE_MISSES.plot(AngelicaTesrMeshCache.cacheMisses);
+        P_TESR_SHADER_BAKED_BINDS.plot(TesrShaderPrograms.bakedBinds);
+        P_TESR_SHADER_INSTANCED_BINDS.plot(TesrShaderPrograms.instancedBinds);
+        P_TESR_SHADER_FALLBACKS.plot(TesrShaderPrograms.fallbacks);
+        P_TESR_SHADER_LINK_FAILURES.plot(TesrShaderPrograms.linkFailures);
         P_TESR_MODEL_PARTS.plot(batcher.statParts());
         P_ARMOR_BASE_REUSES.plot(batcher.statArmorBaseReuses());
         P_GLINT_PASS_REUSES.plot(batcher.statGlintPassReuses());

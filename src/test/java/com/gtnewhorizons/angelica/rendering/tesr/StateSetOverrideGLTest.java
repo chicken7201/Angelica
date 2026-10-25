@@ -29,14 +29,17 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL14;
 import org.lwjgl.opengl.GL20;
 
 import java.lang.reflect.Constructor;
+import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 import java.util.function.IntSupplier;
 import java.util.stream.Stream;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -76,6 +79,19 @@ class StateSetOverrideGLTest {
         if (otherProgram != 0) GLStateManager.glDeleteProgram(otherProgram);
     }
 
+    /** Returns the driver blend func result for StateSetOverrideGLTest. */
+    private static int[] driverBlendFunc() {
+        return new int[] {GL11.glGetInteger(GL14.GL_BLEND_SRC_RGB), GL11.glGetInteger(GL14.GL_BLEND_DST_RGB),
+            GL11.glGetInteger(GL14.GL_BLEND_SRC_ALPHA), GL11.glGetInteger(GL14.GL_BLEND_DST_ALPHA)};
+    }
+
+    /** Returns the driver color mask result for StateSetOverrideGLTest. */
+    private static boolean[] driverColorMask() {
+        final ByteBuffer mask = BufferUtils.createByteBuffer(16);
+        GL11.glGetBoolean(GL11.GL_COLOR_WRITEMASK, mask);
+        return new boolean[] {mask.get(0) != 0, mask.get(1) != 0, mask.get(2) != 0, mask.get(3) != 0};
+    }
+
     /** Vanilla blend is enabled SRC_ALPHA/ONE_MINUS_SRC_ALPHA/ONE/ZERO under an Iris override. */
     private static void overrideVanillaBlend() {
         VanillaLayerRig.installBlend();
@@ -94,17 +110,35 @@ class StateSetOverrideGLTest {
         AlphaTestStorage.overrideAlphaTest(new AlphaTest(AlphaTestFunction.LEQUAL, 0.25f));
     }
 
-    @Test
-    void blendBracketUnderOverrideRestoresVanillaShadowAndLeavesLiveStateUntouched() {
+    /** Returns the blend func setters result for StateSetOverrideGLTest. */
+    static Stream<Arguments> blendFuncSetters() {
+        return Stream.of(
+            Arguments.of("glBlendFunc", (Runnable) () -> GLStateManager.glBlendFunc(GL11.GL_DST_COLOR, GL11.GL_ZERO)),
+            Arguments.of("tryBlendFuncSeparate", (Runnable) () -> GLStateManager.tryBlendFuncSeparate(GL11.GL_DST_COLOR, GL11.GL_ZERO, GL11.GL_DST_COLOR, GL11.GL_ZERO)));
+    }
+
+    /** Verifies blend bracket under override restores vanilla shadow and leaves live state untouched. */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("blendFuncSetters")
+    void blendBracketUnderOverrideRestoresVanillaShadowAndLeavesLiveStateUntouched(String name, Runnable setBlendFunc) {
         overrideVanillaBlend();
 
         final boolean liveEnabledBefore = GLStateManager.getBlendMode().isEnabled();
         final BlendState liveBefore = new BlendState().set(GLStateManager.getBlendState());
+        final boolean driverEnabledBefore = GL11.glIsEnabled(GL11.GL_BLEND);
+        final int[] driverFuncBefore = driverBlendFunc();
+        assertTrue(driverEnabledBefore, "driver blend enable carries the override");
+        assertArrayEquals(new int[] {GL11.GL_ONE, GL11.GL_ONE, GL11.GL_ZERO, GL11.GL_ONE}, driverFuncBefore, "driver blend func carries the override");
 
         final int d = GLStateManager.pushState(StateSet.BLEND);
+        final boolean vanillaEnabledBefore = BlendModeStorage.ENABLE_LAYER.getVanilla();
         GLStateManager.disableBlend();
-        GLStateManager.tryBlendFuncSeparate(GL11.GL_DST_COLOR, GL11.GL_ZERO, GL11.GL_DST_COLOR, GL11.GL_ZERO);
+        assertNotEquals(vanillaEnabledBefore, BlendModeStorage.ENABLE_LAYER.getVanilla(), "the defer branch changes the vanilla shadow immediately");
+        setBlendFunc.run();
         GLStateManager.popStateTo(d);
+
+        assertEquals(driverEnabledBefore, GL11.glIsEnabled(GL11.GL_BLEND), "driver blend enable left untouched by the bracket");
+        assertArrayEquals(driverFuncBefore, driverBlendFunc(), "driver blend func left untouched by the bracket");
 
         assertTrue(BlendModeStorage.ENABLE_LAYER.getVanilla(), "vanilla shadow enable restored to the pre-bracket value");
         final BlendState vanillaAfter = new BlendState();
@@ -121,6 +155,7 @@ class StateSetOverrideGLTest {
         assertEquals(liveBefore.getDstAlpha(), GLStateManager.getBlendState().getDstAlpha(), "live overridden dst alpha left untouched");
     }
 
+    /** Verifies alpha bracket under override restores vanilla shadow and leaves live state untouched. */
     @Test
     void alphaBracketUnderOverrideRestoresVanillaShadowAndLeavesLiveStateUntouched() {
         overrideVanillaAlpha();
@@ -132,7 +167,18 @@ class StateSetOverrideGLTest {
         final int d = GLStateManager.pushState(StateSet.ALPHA);
         GLStateManager.disableAlphaTest();
         GLStateManager.glAlphaFunc(GL11.GL_LESS, 0.1f);
+        final int[] calls = { 0 };
+        final AlphaState shadow = new AlphaState();
+        listener = () -> {
+            calls[0]++;
+            assertEquals(GL11.GL_LEQUAL, GLStateManager.getAlphaState().getFunction());
+            assertEquals(0.25f, GLStateManager.getAlphaState().getReference());
+            assertTrue(GLStateManager.isEffectiveAlphaTestEnabled());
+            assertEquals(GL11.GL_GREATER, GLStateManager.getEffectiveAlphaState(shadow).getFunction());
+            assertEquals(0.5f, shadow.getReference());
+        };
         GLStateManager.popStateTo(d);
+        assertEquals(1, calls[0]);
 
         assertTrue(AlphaTestStorage.ENABLE_LAYER.getVanilla(), "vanilla shadow enable restored to the pre-bracket value");
         final AlphaState vanillaAfter = new AlphaState();
@@ -145,6 +191,7 @@ class StateSetOverrideGLTest {
         assertEquals(liveRefBefore, GLStateManager.getAlphaState().getReference(), 0.0001f, "live overridden ref left untouched");
     }
 
+    /** Verifies masks bracket under override restores vanilla shadow and leaves live state untouched. */
     @Test
     void masksBracketUnderOverrideRestoresVanillaShadowAndLeavesLiveStateUntouched() {
         VanillaLayerRig.installDepthColor();
@@ -156,11 +203,18 @@ class StateSetOverrideGLTest {
 
         final boolean liveMaskBefore = GLStateManager.getDepthState().isEnabled();
         final ColorMask liveColorBefore = new ColorMask().set(GLStateManager.getColorMask());
+        final boolean driverDepthBefore = GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK);
+        final boolean[] driverColorBefore = driverColorMask();
+        assertFalse(driverDepthBefore, "driver depth mask carries the held-off value");
+        assertFalse(driverColorBefore[0] || driverColorBefore[1] || driverColorBefore[2] || driverColorBefore[3], "driver color mask carries the held-off value");
 
         final int d = GLStateManager.pushState(StateSet.MASKS);
-        GLStateManager.glDepthMask(true);
+        GLStateManager.glDepthMask(false);
         GLStateManager.glColorMask(true, true, true, true);
         GLStateManager.popStateTo(d);
+
+        assertEquals(driverDepthBefore, GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK), "driver depth mask left untouched by the bracket");
+        assertArrayEquals(driverColorBefore, driverColorMask(), "driver color mask left untouched by the bracket");
 
         final DepthState vanillaDepthAfter = new DepthState();
         DepthColorStorage.DEPTH_LAYER.readVanilla(vanillaDepthAfter);
@@ -242,118 +296,6 @@ class StateSetOverrideGLTest {
     }
 
     @Test
-    void glDepthMaskDeferBranchInsideBracketRestoredAtPop() {
-        VanillaLayerRig.installDepthColor();
-
-        GLStateManager.glDepthMask(true);
-        DepthColorStorage.disableDepthColor();
-
-        final int d = GLStateManager.pushState(StateSet.MASKS);
-        final boolean liveBefore = GLStateManager.getDepthState().isEnabled();
-
-        GLStateManager.glDepthMask(false);
-
-        GLStateManager.popStateTo(d);
-
-        assertEquals(liveBefore, GLStateManager.getDepthState().isEnabled(), "GLSM's own depth-mask cache is untouched by the defer branch, so the bracket pop leaves it exactly as it was");
-        final DepthState vanillaAfter = new DepthState();
-        DepthColorStorage.DEPTH_LAYER.readVanilla(vanillaAfter);
-        assertTrue(vanillaAfter.isEnabled(), "the bracket pop reverts the vanilla depth-mask shadow to the pre-bracket baseline, undoing the defer branch's write");
-    }
-
-    @Test
-    void glColorMaskDeferBranchInsideBracketRestoredAtPop() {
-        VanillaLayerRig.installDepthColor();
-
-        GLStateManager.glColorMask(true, true, true, true);
-        DepthColorStorage.disableDepthColor();
-
-        final int d = GLStateManager.pushState(StateSet.MASKS);
-        final ColorMask liveBefore = new ColorMask().set(GLStateManager.getColorMask());
-
-        GLStateManager.glColorMask(false, false, true, true);
-
-        GLStateManager.popStateTo(d);
-
-        assertEquals(liveBefore.red, GLStateManager.getColorMask().red, "GLSM's own color-mask cache is untouched by the defer branch, so the bracket pop leaves it exactly as it was");
-        assertEquals(liveBefore.green, GLStateManager.getColorMask().green, "GLSM's own color-mask cache green channel is untouched by the defer branch");
-        final ColorMask vanillaAfter = new ColorMask();
-        DepthColorStorage.COLOR_LAYER.readVanilla(vanillaAfter);
-        assertTrue(vanillaAfter.red && vanillaAfter.green, "the bracket pop reverts the vanilla color-mask shadow to the pre-bracket baseline, undoing the defer branch's write");
-    }
-
-    @Test
-    void glAlphaFuncDeferBranchInsideBracketRestoredAtPop() {
-        overrideVanillaAlpha();
-
-        final int d = GLStateManager.pushState(StateSet.ALPHA);
-        final int liveFuncBefore = GLStateManager.getAlphaState().getFunction();
-
-        GLStateManager.glAlphaFunc(GL11.GL_LESS, 0.1f);
-
-        GLStateManager.popStateTo(d);
-
-        assertEquals(liveFuncBefore, GLStateManager.getAlphaState().getFunction(), "GLSM's own alpha-func cache is untouched by the defer branch, so the bracket pop leaves it exactly as it was");
-        final AlphaState vanillaAfter = new AlphaState();
-        AlphaTestStorage.FUNC_LAYER.readVanilla(vanillaAfter);
-        assertEquals(GL11.GL_GREATER, vanillaAfter.getFunction(), "the bracket pop reverts the vanilla alpha-func shadow to the pre-bracket baseline, undoing the defer branch's write");
-        assertEquals(0.5f, vanillaAfter.getReference(), 0.0001f, "the bracket pop reverts the vanilla alpha-ref shadow to the pre-bracket baseline");
-    }
-
-    static Stream<Arguments> blendFuncSetters() {
-        return Stream.of(
-            Arguments.of("glBlendFunc", (Runnable) () -> GLStateManager.glBlendFunc(GL11.GL_DST_COLOR, GL11.GL_ZERO)),
-            Arguments.of("tryBlendFuncSeparate", (Runnable) () -> GLStateManager.tryBlendFuncSeparate(GL11.GL_DST_COLOR, GL11.GL_ZERO, GL11.GL_DST_COLOR, GL11.GL_ZERO)));
-    }
-
-    @ParameterizedTest(name = "{0}")
-    @MethodSource("blendFuncSetters")
-    void blendFuncDeferBranchInsideBracketRestoredAtPop(String name, Runnable setBlendFunc) {
-        overrideVanillaBlend();
-
-        final int d = GLStateManager.pushState(StateSet.BLEND);
-        final int liveSrcBefore = GLStateManager.getBlendState().getSrcRgb();
-
-        setBlendFunc.run();
-
-        GLStateManager.popStateTo(d);
-
-        assertEquals(liveSrcBefore, GLStateManager.getBlendState().getSrcRgb(), "GLSM's own blend-func cache is untouched by the defer branch, so the bracket pop leaves it exactly as it was");
-        final BlendState vanillaAfter = new BlendState();
-        BlendModeStorage.FUNC_LAYER.readVanilla(vanillaAfter);
-        assertEquals(GL11.GL_SRC_ALPHA, vanillaAfter.getSrcRgb(), "the bracket pop reverts the vanilla blend-func shadow to the pre-bracket baseline, undoing the defer branch's write");
-    }
-
-    @Test
-    void enableBlendDeferBranchInsideBracketRestoredAtPop() {
-        overrideVanillaBlend();
-
-        final int d = GLStateManager.pushState(StateSet.BLEND);
-        final boolean vanillaBefore = BlendModeStorage.ENABLE_LAYER.getVanilla();
-
-        GLStateManager.disableBlend();
-        assertNotEquals(vanillaBefore, BlendModeStorage.ENABLE_LAYER.getVanilla(), "the defer branch changes the vanilla shadow immediately");
-
-        GLStateManager.popStateTo(d);
-
-        assertEquals(vanillaBefore, BlendModeStorage.ENABLE_LAYER.getVanilla(), "the boolean defer branch is tracked by beforeModify, so the bracket pop reverts the vanilla shadow to the pre-bracket baseline");
-    }
-
-    @Test
-    void enableAlphaTestDeferBranchInsideBracketRestoredAtPop() {
-        overrideVanillaAlpha();
-
-        final int d = GLStateManager.pushState(StateSet.ALPHA);
-        final boolean vanillaBefore = AlphaTestStorage.ENABLE_LAYER.getVanilla();
-
-        GLStateManager.disableAlphaTest();
-
-        GLStateManager.popStateTo(d);
-
-        assertEquals(vanillaBefore, AlphaTestStorage.ENABLE_LAYER.getVanilla(), "the boolean defer branch is tracked by beforeModify, so the bracket pop reverts the vanilla shadow to the pre-bracket baseline");
-    }
-
-    @Test
     void nonMemberBracketUnderOverrideCarriesToParent() {
         overrideVanillaBlend();
 
@@ -415,33 +357,6 @@ class StateSetOverrideGLTest {
         GLStateManager.popStateTo(inner);
         assertEquals(0, calls[0]);
         GLStateManager.popStateTo(outer);
-        assertEquals(1, calls[0]);
-    }
-
-    @Test
-    void lockedOverrideRestoresEffectiveStateBeforeNotification() {
-        GLStateManager.enableAlphaTest();
-        GLStateManager.glAlphaFunc(GL11.GL_GREATER, 0.5f);
-        VanillaLayerRig.installAlpha();
-        AlphaTestStorage.overrideAlphaTest(new AlphaTest(AlphaTestFunction.LEQUAL, 0.75f));
-        final int depth = GLStateManager.pushState(StateSet.ALPHA);
-        GLStateManager.getAlphaState().beforeModify();
-        final AlphaState shadow = new AlphaState();
-        shadow.setFunction(GL11.GL_LESS);
-        shadow.setReference(0.25f);
-        AlphaTestStorage.FUNC_LAYER.writeVanilla(shadow);
-        GLStateManager.getAlphaTest().beforeModify();
-        AlphaTestStorage.ENABLE_LAYER.setVanilla(false);
-        final int[] calls = { 0 };
-        listener = () -> {
-            calls[0]++;
-            assertEquals(GL11.GL_LEQUAL, GLStateManager.getAlphaState().getFunction());
-            assertEquals(0.75f, GLStateManager.getAlphaState().getReference());
-            assertTrue(GLStateManager.isEffectiveAlphaTestEnabled());
-            assertEquals(GL11.GL_GREATER, GLStateManager.getEffectiveAlphaState(shadow).getFunction());
-            assertEquals(0.5f, shadow.getReference());
-        };
-        GLStateManager.popStateTo(depth);
         assertEquals(1, calls[0]);
     }
 

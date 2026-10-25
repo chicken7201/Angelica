@@ -3,11 +3,13 @@ package com.gtnewhorizons.angelica.mixins.early.angelica;
 import com.gtnewhorizons.angelica.AngelicaMod;
 import com.gtnewhorizons.angelica.client.font.BatchingFontRenderer;
 import com.gtnewhorizons.angelica.glsm.ffp.ShaderManager;
+import com.gtnewhorizons.angelica.glsm.profiling.Tracy;
 import com.gtnewhorizons.angelica.glsm.streaming.TessellatorStreamingDrawer;
 import com.gtnewhorizons.angelica.mixins.interfaces.IGameSettingsExt;
 import com.gtnewhorizons.angelica.proxy.ClientProxy;
 import com.gtnewhorizons.angelica.rendering.FpsReducer;
 import com.gtnewhorizons.angelica.rendering.FramePacer;
+import com.gtnewhorizons.angelica.rendering.tesr.TesrBatchRenderer;
 import com.llamalad7.mixinextras.injector.ModifyExpressionValue;
 import com.llamalad7.mixinextras.injector.v2.WrapWithCondition;
 import net.minecraft.client.Minecraft;
@@ -43,6 +45,8 @@ public abstract class MixinMinecraft {
 
     @Unique
     private static boolean angelica$hadWorld;
+
+    @Unique private static final Tracy.ZoneId angelica$Z_STREAMING_END_FRAME = Tracy.zoneId("streamingEndFrame", Tracy.COLOR_CLIENT);
 
     @Inject(
         method = "runGameLoop",
@@ -109,11 +113,18 @@ public abstract class MixinMinecraft {
         ((IGameSettingsExt) gameSettings).angelica$setShowFpsGraph(Keyboard.isKeyDown(Keyboard.KEY_LMENU) || Keyboard.isKeyDown(Keyboard.KEY_RMENU));
     }
 
+    /** Updates streaming buffer end frame state for MixinMinecraft. */
     @Inject(method = "runGameLoop", at = @At("RETURN"))
     private void angelica$streamingBufferEndFrame(CallbackInfo ci) {
-        TessellatorStreamingDrawer.endFrame();
-        BatchingFontRenderer.endFrame();
-        ShaderManager.endFrame();
+        if (Tracy.ENABLED) Tracy.beginZone(angelica$Z_STREAMING_END_FRAME);
+        try {
+            TessellatorStreamingDrawer.endFrame();
+            BatchingFontRenderer.endFrame();
+            TesrBatchRenderer.INSTANCE.instanceRing().endFrame();
+            ShaderManager.endFrame();
+        } finally {
+            if (Tracy.ENABLED) Tracy.endZone();
+        }
     }
 
     @ModifyExpressionValue(

@@ -229,6 +229,17 @@ class AttributeTransformerInstancedTest {
         return v;
     }
 
+    /** Returns the instanced stages result for AttributeTransformerInstancedTest. */
+    private static Map<PatchShaderType, String> instancedStages(String vertex, String fragment, Instancing instancing) {
+        final Map<PatchShaderType, String> result = TransformPatcher.patchAttributesInstanced(vertex, null, null, null, fragment, TEX_LM, false, instancing);
+        assertNotNull(result);
+        assertNotNull(result.get(PatchShaderType.VERTEX));
+        assertNotNull(result.get(PatchShaderType.FRAGMENT));
+        ShaderParser.parseShader(result.get(PatchShaderType.VERTEX));
+        ShaderParser.parseShader(result.get(PatchShaderType.FRAGMENT));
+        return result;
+    }
+
     @Test
     void declaresInstanceAttribsAtDistinctLocationsAndGlobalMatrices() {
         final String v = instancedVertex(VERTEX);
@@ -249,14 +260,9 @@ class AttributeTransformerInstancedTest {
     /** Verifies instanced shaders pass material IDs through normalized instance attributes. */
     @Test
     void entityIdsRideTheInstanceAttribute() {
-        final Map<PatchShaderType, String> result = TransformPatcher.patchAttributesInstanced(VERTEX_ENTITY, null, null, null, FRAGMENT_ENTITY, TEX_LM, false, Instancing.TEMPLATE);
-        assertNotNull(result);
+        final Map<PatchShaderType, String> result = instancedStages(VERTEX_ENTITY, FRAGMENT_ENTITY, Instancing.TEMPLATE);
         final String v = result.get(PatchShaderType.VERTEX);
         final String f = result.get(PatchShaderType.FRAGMENT);
-        assertNotNull(v);
-        assertNotNull(f);
-        ShaderParser.parseShader(v);
-        ShaderParser.parseShader(f);
 
         assertLacks(v, "uniform int entityId;");
         assertLacks(v, "uniform int blockEntityId;");
@@ -270,16 +276,12 @@ class AttributeTransformerInstancedTest {
         assertHas(f, "flat in ivec3 iris_entityInfo;");
     }
 
+    /** Verifies entity color is a varying from the overlay slot. */
     @Test
     void entityColorIsAVaryingFromTheOverlaySlot() {
-        final Map<PatchShaderType, String> result = TransformPatcher.patchAttributesInstanced(VERTEX_OVERLAY, null, null, null, FRAGMENT_OVERLAY, TEX_LM, false, Instancing.TEMPLATE);
-        assertNotNull(result);
+        final Map<PatchShaderType, String> result = instancedStages(VERTEX_OVERLAY, FRAGMENT_OVERLAY, Instancing.TEMPLATE);
         final String v = result.get(PatchShaderType.VERTEX);
         final String f = result.get(PatchShaderType.FRAGMENT);
-        assertNotNull(v);
-        assertNotNull(f);
-        ShaderParser.parseShader(v);
-        ShaderParser.parseShader(f);
 
         assertLacks(v, "uniform vec4 entityColor;");
         assertHas(v, "out vec4 entityColor;");
@@ -441,14 +443,9 @@ class AttributeTransformerInstancedTest {
     /** Verifies particle material IDs and overlay colors follow the immediate shader path. */
     @Test
     void particleEntityIdsAndOverlayColorFollowTheNonePath() {
-        final Map<PatchShaderType, String> result = TransformPatcher.patchAttributesInstanced(VERTEX_ENTITY_AND_COLOR, null, null, null, FRAGMENT_ENTITY_AND_COLOR, TEX_LM, false, Instancing.PARTICLE);
-        assertNotNull(result);
+        final Map<PatchShaderType, String> result = instancedStages(VERTEX_ENTITY_AND_COLOR, FRAGMENT_ENTITY_AND_COLOR, Instancing.PARTICLE);
         final String v = result.get(PatchShaderType.VERTEX);
         final String f = result.get(PatchShaderType.FRAGMENT);
-        assertNotNull(v);
-        assertNotNull(f);
-        ShaderParser.parseShader(v);
-        ShaderParser.parseShader(f);
 
         assertLacks(v, "uniform int entityId;");
         assertHas(v, "layout(location = " + ImmediateExtendedAttribHandler.LOC_ENTITY_IDS + ") in vec4 iris_Entity;");

@@ -47,6 +47,36 @@ public final class TextureUtilHooks {
         GLStateManager.ctx().savedFilterTextureId = 0;
     }
 
+    /** Starts tracking a texture-filter save operation. */
+    public static boolean beginFilterSave(boolean blurred, boolean mipmap, float aniso) {
+        captureBoundFilterTexture();
+        return GLStateManager.beginExitTextureFilter(!blurred && !mipmap && aniso == 1);
+    }
+
+    /** Finishes tracking a texture-filter save operation. */
+    public static void endFilterSave(boolean captured) {
+        if (captured) GLStateManager.finishExitTextureFilterSave();
+    }
+
+    /** Starts tracking restoration of a saved texture filter. */
+    public static boolean beginFilterRestore() {
+        return GLStateManager.beginExitTextureFilterRestore();
+    }
+
+    /** Finishes tracking restoration of a saved texture filter. */
+    public static void endFilterRestore(boolean captured) {
+        try {
+            if (captured) GLStateManager.finishExitTextureFilterRestore();
+        } finally {
+            clearSavedFilterTexture();
+        }
+    }
+
+    /** Rejects filter capture after a failed texture-filter operation. */
+    public static void filterFailed(boolean captured) {
+        if (captured) GLStateManager.failExitTextureFilter();
+    }
+
     public static void restoreFilter(int min, int mag) {
         final int id = GLStateManager.ctx().savedFilterTextureId;
         if (id != 0 && DisplayListManager.getRecordMode() == DisplayListManager.RecordMode.NONE) {

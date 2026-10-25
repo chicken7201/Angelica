@@ -23,6 +23,7 @@ class PersistentMappingDirtyRangeTest {
         MemoryUtil.memFree(pm.staging);
     }
 
+    /** Verifies first write transitions and reports its range. */
     @Test
     void firstWriteTransitionsAndReportsItsRange() {
         final PersistentMapping pm = mapping(256);
@@ -36,6 +37,7 @@ class PersistentMappingDirtyRangeTest {
             assertEquals(16, PersistentMapping.rangeOffset(claimed));
             assertEquals(32, PersistentMapping.rangeSize(claimed));
             assertFalse(pm.isDirty(), "claiming leaves the mapping clean");
+            assertTrue(PersistentMapping.isClean(pm.claimDirty()), "second claim gets nothing");
         } finally {
             free(pm);
         }
@@ -77,18 +79,6 @@ class PersistentMappingDirtyRangeTest {
             assertFalse(pm.markDirty(32, 0));
             assertFalse(pm.isDirty());
             assertTrue(PersistentMapping.isClean(pm.claimDirty()));
-        } finally {
-            free(pm);
-        }
-    }
-
-    @Test
-    void claimIsExclusive() {
-        final PersistentMapping pm = mapping(256);
-        try {
-            pm.markDirty(0, 8);
-            assertFalse(PersistentMapping.isClean(pm.claimDirty()), "first claim wins");
-            assertTrue(PersistentMapping.isClean(pm.claimDirty()), "second claim gets nothing");
         } finally {
             free(pm);
         }

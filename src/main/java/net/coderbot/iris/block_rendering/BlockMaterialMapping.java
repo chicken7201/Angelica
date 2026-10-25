@@ -103,7 +103,7 @@ public class BlockMaterialMapping {
 		nbtEntries.forEach((intId, entries) -> {
 			for (BlockEntry entry : entries) {
 				if (entry.hasNbtProperties()) {
-					map.addCondition(entry.id(), entry.nbtProperties(), intId);
+					map.addCondition(entry.id(), entry.nbtProperties(), intId, entry.metas());
 				}
 			}
 		});
@@ -111,6 +111,7 @@ public class BlockMaterialMapping {
 		return map;
 	}
 
+	/** Adds tile entity entry for BlockMaterialMapping. */
 	private static void addTileEntityEntry(BlockEntry entry, NbtConditionalIdMap<Block> teMap, int intId) {
 		final NamespacedId id = entry.id();
 		final ResourceLocation resourceLocation = new ResourceLocation(id.getNamespace(), id.getName());
@@ -121,7 +122,7 @@ public class BlockMaterialMapping {
 			return;
 		}
 
-		teMap.addCondition(block, entry.nbtProperties(), intId);
+		teMap.addCondition(block, entry.nbtProperties(), intId, entry.metas());
 	}
 
 	/**

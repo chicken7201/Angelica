@@ -22,8 +22,10 @@ public final class TextureUnitBooleanStateStack extends BooleanStateStack {
         this.unitIndex = unitIndex;
     }
 
+    /** Updates enabled for TextureUnitBooleanStateStack. */
     @Override
     public void setEnabled(boolean enabled) {
+        GLStateManager.recordExitCapability(cowDepths().owner, glCap, unitIndex);
         if (!GLStateManager.isCachingEnabled() || enabled != this.enabled) {
             GLStateManager.beforeUncapturedTextureUnitChange(glCap, unitIndex);
             beforeModify();

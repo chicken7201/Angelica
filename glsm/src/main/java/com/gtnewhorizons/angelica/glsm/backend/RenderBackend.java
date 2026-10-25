@@ -97,9 +97,10 @@ public abstract class RenderBackend {
         return resolveTearFreeMode(preferredTearFreeMode, this::supportsVSyncMode);
     }
 
+    /** Resolves tear free mode for RenderBackend. */
     static VSyncMode resolveTearFreeMode(VSyncMode preferred, Predicate<VSyncMode> supported) {
         if (preferred != null && preferred.tearFree() && supported.test(preferred)) return preferred;
-        return supported.test(VSyncMode.MAILBOX) ? VSyncMode.MAILBOX : VSyncMode.ON;
+        return VSyncMode.ON;
     }
 
     protected abstract VSyncMode applyVSyncMode(VSyncMode preferred);
@@ -457,6 +458,12 @@ public abstract class RenderBackend {
     public abstract void deleteFramebuffers(int framebuffer);
     public abstract void bindFramebuffer(int target, int framebuffer);
     public abstract void framebufferTexture2D(int target, int attachment, int textarget, int texture, int level);
+    /** Updates framebuffer texture1 d state for RenderBackend. */
+    public abstract void framebufferTexture1D(int target, int attachment, int textarget, int texture, int level);
+    /** Updates framebuffer texture3 d state for RenderBackend. */
+    public abstract void framebufferTexture3D(int target, int attachment, int textarget, int texture, int level, int zoffset);
+    /** Updates framebuffer texture layer state for RenderBackend. */
+    public abstract void framebufferTextureLayer(int target, int attachment, int texture, int level, int layer);
     public abstract void framebufferTexture(int target, int attachment, int texture, int level);
     public abstract int genRenderbuffers();
     public abstract void deleteRenderbuffers(int renderbuffer);

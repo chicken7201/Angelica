@@ -51,6 +51,7 @@ class EntityIdHelperTest {
         }
     }
 
+    /** Verifies snapshot keeps nbt identity across first pack load and replacement. */
     @Test
     void snapshotKeepsNbtIdentityAcrossFirstPackLoadAndReplacement() {
         final BlockRenderingSettings settings = BlockRenderingSettings.INSTANCE;
@@ -75,7 +76,7 @@ class EntityIdHelperTest {
             for (int id : new int[] { 41, 42 }) {
                 settings.setEntityIds(key -> name.equals(key) ? 17 : -1);
                 final NbtConditionalIdMap<NamespacedId> nbt = new NbtConditionalIdMap<>();
-                nbt.addCondition(name, Collections.singletonMap("Data.Variant", new NbtValue("original", true)), id);
+                nbt.addCondition(name, Collections.singletonMap("Data.Variant", new NbtValue("original", true)), id, null);
                 settings.setEntityNbtMap(nbt);
                 assertEquals(id, identity.resolve(), "resolve the captured variant against the current pack");
                 assertEquals(17, EntityIdHelper.getEntityId(entity), "the live entity has changed variants");

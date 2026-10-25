@@ -202,7 +202,6 @@ public class GLSM_SharedDrawableContext_GLTest {
 
         DrawableContexts.run(sharedDrawable, "SharedDrawableContext-Reentry-Thread", () -> {
             final ShaderManager sm = ShaderManager.getInstance();
-            final boolean wasEnabled = ShaderManager.isEnabled();
             ShaderManager.enable();
             sm.activate();
             try {
@@ -228,7 +227,6 @@ public class GLSM_SharedDrawableContext_GLTest {
                 GLStateManager.glDeleteBuffers(vbo);
             } finally {
                 sm.deactivate();
-                if (!wasEnabled) ShaderManager.disable();
             }
         });
     }
@@ -273,7 +271,6 @@ public class GLSM_SharedDrawableContext_GLTest {
     void indexedListCompiledOnSharedDrawableReplaysOnDisplay() throws Exception {
         final int list = compileIndexedListOnSharedDrawable();
         final ShaderManager sm = ShaderManager.getInstance();
-        final boolean wasEnabled = ShaderManager.isEnabled();
         ShaderManager.enable();
         sm.activate();
         try {
@@ -283,7 +280,6 @@ public class GLSM_SharedDrawableContext_GLTest {
             assertEquals(indexedBatch().getSharedEBO(), GL11.glGetInteger(GL15.GL_ELEMENT_ARRAY_BUFFER_BINDING));
         } finally {
             sm.deactivate();
-            if (!wasEnabled) ShaderManager.disable();
             GLStateManager.glBindVertexArray(0);
         }
     }
@@ -308,6 +304,7 @@ public class GLSM_SharedDrawableContext_GLTest {
         while (made.hasRemaining()) GLStateManager.glDeleteVertexArrays(made.get());
     }
 
+    /** Verifies recorded vao bind replays only on its compile context. */
     @Test
     void recordedVaoBindReplaysOnlyOnItsCompileContext() throws Exception {
         final int bound = GLStateManager.glGenVertexArrays();
@@ -330,8 +327,10 @@ public class GLSM_SharedDrawableContext_GLTest {
         GLStateManager.glBindVertexArray(bound);
         GLStateManager.glCallList(foreignList);
         assertEquals(bound, GLStateManager.getBoundVAO());
+        assertEquals(bound, GL11.glGetInteger(GL30.GL_VERTEX_ARRAY_BINDING));
         GLStateManager.glCallList(localList);
         assertEquals(local, GLStateManager.getBoundVAO());
+        assertEquals(local, GL11.glGetInteger(GL30.GL_VERTEX_ARRAY_BINDING));
 
         GLStateManager.glBindVertexArray(0);
         GLStateManager.glDeleteVertexArrays(bound);

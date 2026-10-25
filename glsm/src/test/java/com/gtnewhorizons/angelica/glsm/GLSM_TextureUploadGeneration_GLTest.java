@@ -38,16 +38,6 @@ public class GLSM_TextureUploadGeneration_GLTest {
     }
 
     @Test
-    void anUploadLeavesANonZeroGeneration() {
-        final int texId = allocate(4);
-        try {
-            assertNotEquals(0, TextureInfoCache.INSTANCE.getInfo(texId).getUploadGeneration());
-        } finally {
-            GLStateManager.glDeleteTextures(texId);
-        }
-    }
-
-    @Test
     void recreatingATextureAtAReusedIdYieldsAFreshInfo() {
         final int texId = allocate(4);
         try {
@@ -66,12 +56,14 @@ public class GLSM_TextureUploadGeneration_GLTest {
         }
     }
 
+    /** Verifies an in place rewrite bumps the generation. */
     @Test
     void anInPlaceRewriteBumpsTheGeneration() {
         final int texId = allocate(4);
         try {
             final TextureInfo info = TextureInfoCache.INSTANCE.getInfo(texId);
             final int afterAlloc = info.getUploadGeneration();
+            assertNotEquals(0, afterAlloc);
 
             GLStateManager.glTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, 2, 2, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, BufferUtils.createByteBuffer(2 * 2 * 4));
             assertNotEquals(afterAlloc, info.getUploadGeneration(), "content changed, so anything caching the pixels is stale");

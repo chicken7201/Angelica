@@ -82,6 +82,7 @@ class FfpUniformBlockDedupTest {
         }
     }
 
+    /** Verifies an unbound instance writes even when the content matches. */
     @Test
     void anUnboundInstanceWritesEvenWhenTheContentMatches() {
         resetState();
@@ -94,9 +95,29 @@ class FfpUniformBlockDedupTest {
 
             second.upload(GLStateManager.ctx());
             assertEquals(1, second.blockWrites, "a never-bound instance must write regardless of content");
+            assertEquals(second.getRing().getBufferId(), GL30.glGetInteger(GL31.GL_UNIFORM_BUFFER_BINDING, FFPUniformBlock.BINDING_POINT));
         } finally {
             first.destroy();
             second.destroy();
+            resetState();
+        }
+    }
+
+    /** Verifies unchanged content still writes after frame end. */
+    @Test
+    void unchangedContentStillWritesAfterFrameEnd() {
+        resetState();
+        final Uniforms uniforms = new Uniforms();
+        try {
+            uniforms.upload(GLStateManager.ctx());
+            final int firstOffset = boundRangeStart();
+            uniforms.endFrame();
+
+            uniforms.upload(GLStateManager.ctx());
+            assertEquals(1, uniforms.blockWrites, "the frame-end fence owns the old range, so the next frame must not reuse it");
+            assertNotEquals(firstOffset, boundRangeStart());
+        } finally {
+            uniforms.destroy();
             resetState();
         }
     }

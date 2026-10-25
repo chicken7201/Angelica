@@ -202,19 +202,25 @@ public final class ShaderManager {
         FfpExtendedAttribs.endFrame();
     }
 
+    /** Updates normal for ShaderManager. */
     public void setNormal(float x, float y, float z) {
+        GLStateManager.recordExitNormal();
         normalStack.beforeModify();
         currentNormal.set(x, y, z);
         normalGeneration++;
     }
 
+    /** Updates tex coord for ShaderManager. */
     public void setTexCoord(float s, float t, float r, float q) {
+        GLStateManager.recordExitTexCoord(0);
         texCoordStack.beforeModify();
         currentTexCoords[0].set(s, t, r, q);
         texCoordGeneration++;
     }
 
+    /** Updates tex coord for ShaderManager. */
     public void setTexCoord(int unit, float s, float t, float r, float q) {
+        GLStateManager.recordExitTexCoord(unit);
         if (unit == 0) texCoordStack.beforeModify();
         currentTexCoords[unit].set(s, t, r, q);
         texCoordGeneration++;

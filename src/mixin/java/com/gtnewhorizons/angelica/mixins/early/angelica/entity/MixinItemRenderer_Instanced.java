@@ -5,7 +5,7 @@ import com.gtnewhorizons.angelica.glsm.profiling.Tracy;
 import com.gtnewhorizons.angelica.rendering.GlintClock;
 import com.gtnewhorizons.angelica.rendering.SkippedGlintBlock;
 import com.gtnewhorizons.angelica.rendering.items.DroppedItemInstancer;
-import com.gtnewhorizons.angelica.rendering.items.HeldItemGlint;
+import com.gtnewhorizons.angelica.rendering.items.ItemGlint;
 import com.gtnewhorizons.angelica.rendering.tesr.EntityMaterials;
 import com.llamalad7.mixinextras.injector.ModifyExpressionValue;
 import net.minecraft.block.Block;
@@ -69,6 +69,7 @@ public abstract class MixinItemRenderer_Instanced {
         if (Tracy.FINE_ZONES) Tracy.endZone();
     }
 
+    /** Returns the held icon result for MixinItemRenderer_Instanced. */
     @Unique
     private static long angelica$heldIcon(float maxU, float minV, float minU, float maxV, int width, int height, float thickness) {
         angelica$iconWidth = width;
@@ -78,20 +79,21 @@ public abstract class MixinItemRenderer_Instanced {
         try {
             // A later pass without glint covers the deferred glint of an earlier one, as vanilla draws it after that glint.
             final boolean afterGlint = angelica$deferredGlintStack != null && stack == angelica$deferredGlintStack && !stack.hasEffect(angelica$pass);
-            return DroppedItemInstancer.icon(angelica$batchable(angelica$type) && !HeldItemGlint.needsImmediateBase(stack, angelica$pass) ? stack : null, afterGlint, maxU, minV, minU, maxV, width, height, thickness);
+            return DroppedItemInstancer.icon(angelica$batchable(angelica$type) && !ItemGlint.needsImmediateBase(stack, angelica$pass) ? stack : null, afterGlint, maxU, minV, minU, maxV, width, height, thickness);
         } catch (Throwable t) {
             if (Tracy.FINE_ZONES) Tracy.endZone();
             throw t;
         }
     }
 
+    /** Returns the queue held glint block result for MixinItemRenderer_Instanced. */
     @ModifyExpressionValue(
         method = "renderItem(Lnet/minecraft/entity/EntityLivingBase;Lnet/minecraft/item/ItemStack;ILnet/minecraftforge/client/IItemRenderer$ItemRenderType;)V",
         at = @At(value = "INVOKE", target = "Lnet/minecraft/item/ItemStack;hasEffect(I)Z"),
         remap = false
     )
     private boolean angelica$queueHeldGlintBlock(boolean hasEffect) {
-        if (!hasEffect || !HeldItemGlint.eligible() || !DroppedItemInstancer.queueSkippedGlint(angelica$iconWidth, angelica$iconHeight)) return hasEffect;
+        if (!hasEffect || !ItemGlint.eligible() || !DroppedItemInstancer.queueSkippedGlint(angelica$iconWidth, angelica$iconHeight, EntityMaterials.ITEM_GLINT)) return hasEffect;
         angelica$deferredGlintStack = angelica$stack;
         angelica$deferredGlintPass = angelica$pass;
         SkippedGlintBlock.applyHeldItemExitState();
@@ -158,9 +160,10 @@ public abstract class MixinItemRenderer_Instanced {
         final boolean queued = part == DroppedItemInstancer.SKIP;
     }
 
+    /** Updates end held block state for MixinItemRenderer_Instanced. */
     @Surround.Finally("block")
     private void angelica$endHeldBlock(@Surround.Carry long part) {
-        DroppedItemInstancer.endPart(part);
+        DroppedItemInstancer.endBlock(part);
     }
 
     @Redirect(

@@ -10,6 +10,8 @@ import java.nio.FloatBuffer;
 import java.util.ArrayList;
 import java.util.List;
 
+import static com.gtnewhorizons.angelica.glsm.DisplayListTestHelper.assertModelviewAfterCall;
+import static com.gtnewhorizons.angelica.glsm.DisplayListTestHelper.modelviewAfterCall;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -70,6 +72,7 @@ class GLSM_DisplayList_Stress_Test {
         }
     }
 
+    /** Verifies test many transforms in single list. */
     @Test
     void testManyTransformsInSingleList() {
         // Create a single display list with many transform operations
@@ -91,19 +94,7 @@ class GLSM_DisplayList_Stress_Test {
 
         GLStateManager.glEndList();
 
-        // Execute and verify final transform
-        GLStateManager.glPushMatrix();
-        GLStateManager.glLoadIdentity();
-        GLStateManager.glCallList(list);
-
-        FloatBuffer actualBuf = BufferUtils.createFloatBuffer(16);
-        GLStateManager.glGetFloat(GL11.GL_MODELVIEW_MATRIX, actualBuf);
-
-        // All push/pop pairs cancel out, only final translate remains
-        assertEquals(42.0f, actualBuf.get(12), 0.0001f,
-            "After many push/pop pairs, only final transform should remain");
-
-        GLStateManager.glPopMatrix();
+        assertEquals(42.0f, modelviewAfterCall(list).get(12), 0.0001f, "After many push/pop pairs, only final transform should remain");
     }
 
     @Test
@@ -127,6 +118,7 @@ class GLSM_DisplayList_Stress_Test {
         }
     }
 
+    /** Verifies test deep nesting chain. */
     @Test
     void testDeepNestingChain() {
         // Create a chain of display lists that call each other
@@ -148,27 +140,10 @@ class GLSM_DisplayList_Stress_Test {
             GLStateManager.glEndList();
         }
 
-        // Execute the outermost list
-        GLStateManager.glPushMatrix();
-        GLStateManager.glLoadIdentity();
-        GLStateManager.glCallList(chain[chainLength - 1]);
-
-        // Final matrix should have translation = chainLength (each list adds 1)
-        FloatBuffer actualBuf = BufferUtils.createFloatBuffer(16);
-        GLStateManager.glGetFloat(GL11.GL_MODELVIEW_MATRIX, actualBuf);
-
-        Matrix4f expected = new Matrix4f().translate(chainLength, 0.0f, 0.0f);
-        FloatBuffer expectedBuf = BufferUtils.createFloatBuffer(16);
-        expected.get(expectedBuf);
-
-        for (int i = 0; i < 16; i++) {
-            assertEquals(expectedBuf.get(i), actualBuf.get(i), 0.0001f,
-                String.format("Matrix[%d] mismatch for chain of %d lists", i, chainLength));
-        }
-
-        GLStateManager.glPopMatrix();
+        assertModelviewAfterCall(chain[chainLength - 1], new Matrix4f().translate(chainLength, 0.0f, 0.0f), "chain of " + chainLength + " lists");
     }
 
+    /** Verifies test many push pop operations. */
     @Test
     void testManyPushPopOperations() {
         // Stress test push/pop stack operations
@@ -192,21 +167,10 @@ class GLSM_DisplayList_Stress_Test {
 
         GLStateManager.glEndList();
 
-        // Execute and verify
-        GLStateManager.glPushMatrix();
-        GLStateManager.glLoadIdentity();
-        GLStateManager.glCallList(list);
-
-        FloatBuffer actualBuf = BufferUtils.createFloatBuffer(16);
-        GLStateManager.glGetFloat(GL11.GL_MODELVIEW_MATRIX, actualBuf);
-
-        // All pushes and pops cancel out, only final 99 translate remains
-        assertEquals(99.0f, actualBuf.get(12), 0.0001f,
-            "After balanced push/pop, only final transform should remain");
-
-        GLStateManager.glPopMatrix();
+        assertEquals(99.0f, modelviewAfterCall(list).get(12), 0.0001f, "After balanced push/pop, only final transform should remain");
     }
 
+    /** Verifies test rapid list switching. */
     @Test
     void testRapidListSwitching() {
         // Create multiple lists and rapidly switch between them
@@ -224,21 +188,12 @@ class GLSM_DisplayList_Stress_Test {
         // Rapidly switch between calling different lists
         for (int iteration = 0; iteration < 100; iteration++) {
             for (int i = 0; i < numLists; i++) {
-                GLStateManager.glPushMatrix();
-                GLStateManager.glLoadIdentity();
-                GLStateManager.glCallList(lists[i]);
-
-                // Verify correct transform was applied
-                FloatBuffer buf = BufferUtils.createFloatBuffer(16);
-                GLStateManager.glGetFloat(GL11.GL_MODELVIEW_MATRIX, buf);
-                assertEquals(i + 1, buf.get(12), 0.0001f,
-                    "List " + i + " should translate by " + (i + 1));
-
-                GLStateManager.glPopMatrix();
+                assertEquals(i + 1, modelviewAfterCall(lists[i]).get(12), 0.0001f, "List " + i + " should translate by " + (i + 1));
             }
         }
     }
 
+    /** Verifies test recompile same id. */
     @Test
     void testRecompileSameId() {
         // Test recompiling a display list with the same ID
@@ -249,32 +204,14 @@ class GLSM_DisplayList_Stress_Test {
         GLStateManager.glTranslatef(5.0f, 0.0f, 0.0f);
         GLStateManager.glEndList();
 
-        // Verify first compilation
-        GLStateManager.glPushMatrix();
-        GLStateManager.glLoadIdentity();
-        GLStateManager.glCallList(list);
-
-        FloatBuffer buf1 = BufferUtils.createFloatBuffer(16);
-        GLStateManager.glGetFloat(GL11.GL_MODELVIEW_MATRIX, buf1);
-        assertEquals(5.0f, buf1.get(12), 0.0001f, "First compilation should translate by 5");
-
-        GLStateManager.glPopMatrix();
+        assertEquals(5.0f, modelviewAfterCall(list).get(12), 0.0001f, "First compilation should translate by 5");
 
         // Recompile with different transform
         GLStateManager.glNewList(list, GL11.GL_COMPILE);
         GLStateManager.glTranslatef(10.0f, 0.0f, 0.0f);
         GLStateManager.glEndList();
 
-        // Verify recompilation
-        GLStateManager.glPushMatrix();
-        GLStateManager.glLoadIdentity();
-        GLStateManager.glCallList(list);
-
-        FloatBuffer buf2 = BufferUtils.createFloatBuffer(16);
-        GLStateManager.glGetFloat(GL11.GL_MODELVIEW_MATRIX, buf2);
-        assertEquals(10.0f, buf2.get(12), 0.0001f, "Recompilation should translate by 10");
-
-        GLStateManager.glPopMatrix();
+        assertEquals(10.0f, modelviewAfterCall(list).get(12), 0.0001f, "Recompilation should translate by 10");
     }
 
     @Test

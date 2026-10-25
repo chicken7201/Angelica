@@ -12,38 +12,47 @@ import jss.notfine.config.MCPatcherForgeConfig;
 
 public class GlassPaneRenderer {
 
-    public static boolean skipPaneRendering;
-    public static boolean skipTopEdgeRendering;
-    public static boolean skipBottomEdgeRendering;
+    private static final ThreadLocal<GlassPaneRenderer> STATE = ThreadLocal.withInitial(GlassPaneRenderer::new);
 
-    private static final IIcon[] icons = new IIcon[6];
+    public boolean skipPaneRendering;
+    public boolean skipTopEdgeRendering;
+    public boolean skipBottomEdgeRendering;
 
-    private static double uLeft; // left edge
-    private static double uLeftThin; // 7/16 point
-    private static double uRightThin; // 9/16 point
-    private static double uRight; // right edge
-    private static double vTop; // top edge
-    private static double vBottom; // bottom edge
+    private final IIcon[] icons = new IIcon[6];
 
-    private static double u1Scaled;
-    private static double u2Scaled;
+    private double uLeft; // left edge
+    private double uLeftThin; // 7/16 point
+    private double uRightThin; // 9/16 point
+    private double uRight; // right edge
+    private double vTop; // top edge
+    private double vBottom; // bottom edge
 
-    public static void renderThin(RenderBlocks renderBlocks, Block blockPane, IIcon origIcon, int x, int y, int z,
+    private double u1Scaled;
+    private double u2Scaled;
+
+    /** Renders thin for GlassPaneRenderer. */
+    public static GlassPaneRenderer renderThin(RenderBlocks renderBlocks, Block blockPane, IIcon origIcon, int x, int y, int z,
         boolean connectNorth, boolean connectSouth, boolean connectWest, boolean connectEast) {
-        if (setupIcons(renderBlocks, blockPane, origIcon, x, y, z)) {
-            render(x, y, z, connectNorth, connectSouth, connectWest, connectEast, 0.0, 0.0, 0.0, false);
+        GlassPaneRenderer state = STATE.get();
+        if (state.setupIcons(renderBlocks, blockPane, origIcon, x, y, z)) {
+            state.render(x, y, z, connectNorth, connectSouth, connectWest, connectEast, 0.0, 0.0, 0.0, false);
         }
+        return state;
     }
 
-    public static void renderThick(RenderBlocks renderBlocks, Block blockPane, IIcon origIcon, int x, int y, int z,
+    /** Renders thick for GlassPaneRenderer. */
+    public static GlassPaneRenderer renderThick(RenderBlocks renderBlocks, Block blockPane, IIcon origIcon, int x, int y, int z,
         boolean connectNorth, boolean connectSouth, boolean connectWest, boolean connectEast) {
-        if (setupIcons(renderBlocks, blockPane, origIcon, x, y, z)) {
-            setupPaneEdges(renderBlocks.blockAccess, blockPane, x, y, z);
-            render(x, y, z, connectNorth, connectSouth, connectWest, connectEast, 0.0625, 1.0, 0.001, true);
+        GlassPaneRenderer state = STATE.get();
+        if (state.setupIcons(renderBlocks, blockPane, origIcon, x, y, z)) {
+            state.setupPaneEdges(renderBlocks.blockAccess, blockPane, x, y, z);
+            state.render(x, y, z, connectNorth, connectSouth, connectWest, connectEast, 0.0625, 1.0, 0.001, true);
         }
+        return state;
     }
 
-    private static boolean setupIcons(RenderBlocks renderBlocks, Block blockPane, IIcon origIcon, int x, int y, int z) {
+    /** Returns the setup icons result for GlassPaneRenderer. */
+    private boolean setupIcons(RenderBlocks renderBlocks, Block blockPane, IIcon origIcon, int x, int y, int z) {
         skipPaneRendering = skipBottomEdgeRendering = skipTopEdgeRendering = false;
         if (!MCPatcherForgeConfig.ConnectedTextures.glassPane) {
             return false;
@@ -61,7 +70,8 @@ public class GlassPaneRenderer {
         return skipPaneRendering;
     }
 
-    private static void setupPaneEdges(IBlockAccess blockAccess, Block blockPane, int x, int y, int z) {
+    /** Updates setup pane edges state for GlassPaneRenderer. */
+    private void setupPaneEdges(IBlockAccess blockAccess, Block blockPane, int x, int y, int z) {
         int metadata = blockAccess.getBlockMetadata(x, y, z);
         skipBottomEdgeRendering = blockAccess.getBlock(x, y - 1, z) == blockPane
             && blockAccess.getBlockMetadata(x, y - 1, z) == metadata;
@@ -69,7 +79,8 @@ public class GlassPaneRenderer {
             && blockAccess.getBlockMetadata(x, y + 1, z) == metadata;
     }
 
-    private static void render(int x, int y, int z, boolean connectNorth, boolean connectSouth, boolean connectWest,
+    /** Renders GlassPaneRenderer state for GlassPaneRenderer. */
+    private void render(int x, int y, int z, boolean connectNorth, boolean connectSouth, boolean connectWest,
         boolean connectEast, double thickness, double uOffset, double yOffset, boolean edges) {
         final double west = x;
         final double westThin = x + 0.5 - thickness;
@@ -226,7 +237,8 @@ public class GlassPaneRenderer {
         }
     }
 
-    private static void setupTileCoords(int face) {
+    /** Updates setup tile coords state for GlassPaneRenderer. */
+    private void setupTileCoords(int face) {
         final IIcon icon = icons[face];
         uLeft = icon.getMinU();
         uLeftThin = icon.getInterpolatedU(u1Scaled);
@@ -245,9 +257,11 @@ public class GlassPaneRenderer {
         tessellator.addVertexWithUV(x1, y0, z1, u1, v0);
     }
 
+    /** Clears GlassPaneRenderer state for GlassPaneRenderer. */
     protected static void clear() {
-        Arrays.fill(icons, null);
-        skipPaneRendering = false;
+        GlassPaneRenderer state = STATE.get();
+        Arrays.fill(state.icons, null);
+        state.skipPaneRendering = false;
     }
 
 }

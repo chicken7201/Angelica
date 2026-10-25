@@ -30,7 +30,9 @@ public final class FrameHooks {
         }
     }
 
+    /** Updates frame end state for FrameHooks. */
     public static void frameEnd() {
+        GLStateManager.onFrameEnd();
         popFrameGroup();
         RENDER_BACKEND.onFrameEnd();
     }

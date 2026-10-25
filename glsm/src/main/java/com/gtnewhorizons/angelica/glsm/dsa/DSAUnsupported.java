@@ -2,13 +2,12 @@ package com.gtnewhorizons.angelica.glsm.dsa;
 
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.stacks.TextureBindingStack;
+import com.gtnewhorizons.angelica.glsm.texture.TextureTargets;
 import org.lwjgl.opengl.GL11;
 
 import static com.gtnewhorizons.angelica.glsm.backend.BackendManager.RENDER_BACKEND;
-import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL30;
-import org.lwjgl.opengl.GL31;
 
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
@@ -150,10 +149,11 @@ public class DSAUnsupported implements DSAAccess {
         RENDER_BACKEND.blitFramebuffer(offsetX, offsetY, width, height, offsetX2, offsetY2, width2, height2, bufferChoice, filter);
     }
 
+    /** Updates framebuffer texture2 d state for DSAUnsupported. */
     @Override
     public void framebufferTexture2D(int fb, int fbtarget, int attachment, int target, int texture, int levels) {
         GLStateManager.glBindFramebuffer(fbtarget, fb);
-        RENDER_BACKEND.framebufferTexture2D(fbtarget, attachment, target, texture, levels);
+        GLStateManager.glFramebufferTexture2D(fbtarget, attachment, target, texture, levels);
     }
 
     @Override
@@ -163,26 +163,17 @@ public class DSAUnsupported implements DSAAccess {
         return framebuffer;
     }
 
+    /** Creates texture for DSAUnsupported. */
     @Override
     public int createTexture(int target) {
         final int texture = GLStateManager.glGenTextures();
-        GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, texture);
+        GLStateManager.glBindTexture(target, texture);
         return texture;
     }
 
-    private static int bindingQuery(int target) {
-        return switch (target) {
-            case GL11.GL_TEXTURE_1D -> GL11.GL_TEXTURE_BINDING_1D;
-            case GL12.GL_TEXTURE_3D -> GL12.GL_TEXTURE_BINDING_3D;
-            case GL13.GL_TEXTURE_CUBE_MAP -> GL13.GL_TEXTURE_BINDING_CUBE_MAP;
-            case GL30.GL_TEXTURE_2D_ARRAY -> GL30.GL_TEXTURE_BINDING_2D_ARRAY;
-            case GL31.GL_TEXTURE_RECTANGLE -> GL31.GL_TEXTURE_BINDING_RECTANGLE;
-            default -> GL11.GL_TEXTURE_BINDING_2D;
-        };
-    }
-
+    /** Returns the previous binding result for DSAUnsupported. */
     private static int previousBinding(int target) {
-        return target == GL11.GL_TEXTURE_2D ? previous2D() : RENDER_BACKEND.getInteger(bindingQuery(target));
+        return target == GL11.GL_TEXTURE_2D ? previous2D() : RENDER_BACKEND.getInteger(TextureTargets.bindingQuery(target));
     }
 
     private static int previous2D() {

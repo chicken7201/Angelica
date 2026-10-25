@@ -163,6 +163,24 @@ public class AngelicaConfig {
     @Config.RequiresMcRestart
     public static boolean enableCubeInstancing;
 
+    @Config.Comment("Stitch a texture atlas between entity and block entity models so different textures draw together (requires cube instancing)")
+    @Config.DefaultBoolean(true)
+    public static boolean enableEntityTextureAtlas;
+
+    @Config.Comment("Replay entity draws recorded in the shader shadow pass in the main view instead of running each entity renderer again (experimental, requires entity batching)")
+    @Config.DefaultBoolean(false)
+    @Config.RequiresMcRestart
+    public static boolean enableEntityShadowReplay;
+
+    @Config.Comment("Entity classes that run their renderer again in the main view instead of replaying shadow pass draws. Players are always excluded.")
+    @Config.DefaultStringList({
+        "chylex.hee.entity.boss.EntityBossDragon",
+        "twilightforest.entity.passive.EntityTFMobileFirefly",
+        "gregtech.common.entity.EntityDrone"
+    })
+    @Config.RequiresMcRestart
+    public static String[] entityShadowReplayExcludedClasses;
+
     @Config.Comment("Skip the end-of-frame shader buffer copy by ping-ponging buffers. Disable if a shader pack misrenders.")
     @Config.DefaultBoolean(true)
     @Config.RequiresMcRestart
@@ -187,6 +205,11 @@ public class AngelicaConfig {
     @Config.DefaultBoolean(true)
     @Config.RequiresMcRestart
     public static boolean enableTESRProviderDispatch;
+
+    @Config.Comment("Cache the lightmap the tile-entity dispatcher looks up per tile per frame, refreshing it once a tick")
+    @Config.DefaultBoolean(true)
+    @Config.RequiresMcRestart
+    public static boolean enableTESRLightCache;
 
     @Config.Comment("Enable full RGB color support (16.7M colors) using &#RRGGBB syntax in text")
     @Config.DefaultBoolean(true)
@@ -282,9 +305,9 @@ public class AngelicaConfig {
     @Config.RangeInt(min = 256, max = 1024)
     public static int itemRendererCacheSize;
 
-    @Config.Comment("Render distance for the spinning mob inside mod spawners")
+    @Config.Comment("Render distance for the spinning mob inside mob spawners. Set to 0 to disable rendering.")
     @Config.DefaultDouble(16D)
-    @Config.RangeDouble(min = 16D, max = 64D)
+    @Config.RangeDouble(min = 0D, max = 64D)
     public static double mobSpawnerRenderDistance;
 
     @Config.Comment("Allows unicode languages to use an odd gui scale")
@@ -542,6 +565,11 @@ public class AngelicaConfig {
 
     public static boolean cubeInstancingEnabled() {
         return enableEntityBatching && enableCubeInstancing;
+    }
+
+    /** Reports whether entity shadow replay is enabled for the current configuration. */
+    public static boolean entityShadowReplayEnabled() {
+        return enableEntityBatching && enableEntityShadowReplay;
     }
 
     public static boolean sdlGpuConfigured() {

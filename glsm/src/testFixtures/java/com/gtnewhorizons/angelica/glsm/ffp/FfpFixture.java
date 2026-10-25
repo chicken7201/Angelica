@@ -1,8 +1,5 @@
 package com.gtnewhorizons.angelica.glsm.ffp;
 
-import com.gtnewhorizon.gtnhlib.client.renderer.vertex.VertexFormat;
-import com.gtnewhorizon.gtnhlib.client.renderer.vertex.VertexFormatElement;
-import com.gtnewhorizon.gtnhlib.client.renderer.vertex.VertexFormatElement.Usage;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.GlTestSupport;
 import org.lwjgl.BufferUtils;
@@ -137,27 +134,6 @@ public final class FfpFixture {
         GLStateManager.glVertexAttribPointer(loc, size, type, normalized, stride, offset);
     }
 
-    private static boolean formatRoutingRegistered;
-    private static boolean routeFormats;
-
-    public static void routeVertexFormats(boolean enabled) {
-        routeFormats = enabled;
-        if (formatRoutingRegistered) return;
-        formatRoutingRegistered = true;
-        VertexFormat.registerSetupBufferStateOverride((format, offset) -> {
-            if (!routeFormats) return false;
-            final int stride = format.getVertexSize();
-            int elementOffset = (int) offset;
-            for (VertexFormatElement element : format.elementsArray) {
-                final Usage usage = element.getUsage();
-                final boolean normalized = usage == Usage.COLOR || usage == Usage.NORMAL;
-                attrib(usage.getAttributeLocation(), element.getCount(), element.getType().getGlType(), normalized, stride, elementOffset);
-                elementOffset += element.getByteSize();
-            }
-            return true;
-        });
-    }
-
     public static void clear() {
         GLStateManager.glClearColor(0f, 0f, 0f, 1f);
         GLStateManager.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
@@ -203,7 +179,13 @@ public final class FfpFixture {
         };
     }
 
+    /** Checks pixel parity against the expected rendering result. */
     public static void assertPixelParity(String subject, int[] reference, int[] candidate, int size, int background, int minCoverageDivisor, int channelTolerance, IntFunction<String> describe) {
+        assertPixelParity(subject, reference, candidate, size, background, minCoverageDivisor, channelTolerance, 0, describe);
+    }
+
+    /** Checks pixel parity against the expected rendering result. */
+    public static void assertPixelParity(String subject, int[] reference, int[] candidate, int size, int background, int minCoverageDivisor, int channelTolerance, int allowedMismatches, IntFunction<String> describe) {
         int covered = 0;
         for (int pixel : reference) {
             if (pixel != background) covered++;
@@ -221,7 +203,7 @@ public final class FfpFixture {
         }
         final int index = firstMismatch;
         final int differing = mismatches;
-        assertEquals(0, mismatches, () -> subject + " differ from baked quads in " + differing + " of " + reference.length + " pixels, first at (" + (index % size) + "," + (index / size) + "): reference " + describe.apply(reference[index]) + " instanced " + describe.apply(candidate[index]));
+        assertTrue(mismatches <= allowedMismatches, () -> subject + " differ from baked quads in " + differing + " of " + reference.length + " pixels, first at (" + (index % size) + "," + (index / size) + "): reference " + describe.apply(reference[index]) + " instanced " + describe.apply(candidate[index]));
     }
 
     private static boolean withinTolerance(int a, int b, int tolerance) {
@@ -249,11 +231,16 @@ public final class FfpFixture {
         assertTrue(coveredPixels > base.length / 8, "base draw covered only " + coveredPixels + " of " + base.length + " pixels");
     }
 
+    /** Updates activate ffp state for FfpFixture. */
+    public static void activateFfp() {
+        ShaderManager.enable();
+        ShaderManager.getInstance().activate();
+    }
+
     public static void resetFfpState() {
         GLStateManager.setFfpInstancing(Instancing.NONE);
         final ShaderManager sm = ShaderManager.getInstance();
         if (sm.isActive()) sm.deactivate();
-        ShaderManager.disable();
         GLStateManager.glBindVertexArray(0);
 
         GLStateManager.glActiveTexture(GL13.GL_TEXTURE1);

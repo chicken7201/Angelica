@@ -13,6 +13,7 @@ import com.gtnewhorizons.angelica.rendering.tesr.BatchEligibility;
 import com.gtnewhorizons.angelica.rendering.tesr.EntityMaterials;
 import com.gtnewhorizons.angelica.rendering.tesr.GlintCapture;
 import com.gtnewhorizons.angelica.rendering.tesr.ModelPartBatcher;
+import com.gtnewhorizons.angelica.rendering.tesr.EntityShadowReplay;
 import com.gtnewhorizons.angelica.rendering.tesr.TemplateBuffer;
 import com.gtnewhorizons.angelica.utils.AnimationsRenderUtils;
 import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
@@ -35,12 +36,12 @@ public final class DroppedItemInstancer {
     private static final AngelicaTesrMeshCache.GtnhMeshBackend iconBackend = new AngelicaTesrMeshCache.GtnhMeshBackend();
     private static BakedTransformCapture blockBackend;
     private static boolean basePart;
+    private static int itemsDrawingBlocks;
     private static final GlintCapture glintCapture = new GlintCapture();
     private static boolean glintSeen;
     private static final ItemPropCache.ItemProp glintProperties = new ItemPropCache.ItemProp();
     private static final ItemPropCache.ItemProp currentGlintProperties = new ItemPropCache.ItemProp();
-    private static TemplateBuffer glintTemplate;
-    private static int glintTemplateWidth, glintTemplateHeight;
+    private static final GlintMesh glintMesh = new GlintMesh();
 
     private static long instanced;
     private static long glintInstanced;
@@ -149,6 +150,7 @@ public final class DroppedItemInstancer {
         }
         final boolean allowed = BatchEligibility.batchingAllowed();
         if (allowed && ModelPartBatcher.INSTANCE.isShadowPass()) {
+            EntityShadowReplay.rejectShadowOnly();
             BatchEligibility.onPartQueued();
             return SKIP;
         }
@@ -182,23 +184,45 @@ public final class DroppedItemInstancer {
         return drawsBefore;
     }
 
-    public static boolean queueSkippedGlint(int iconWidth, int iconHeight) {
-        if (!basePart || !BatchEligibility.batchingAllowed()) return false;
-        if (glintTemplate == null || glintTemplateWidth != iconWidth || glintTemplateHeight != iconHeight) {
-            final IconMesh hit = icons.get(0.0F, 0.0F, 1.0F, 1.0F, iconWidth, iconHeight, 0.0625F);
-            if (hit == null || hit.template == null) return false;
-            glintTemplate = hit.template;
-            glintTemplateWidth = iconWidth;
-            glintTemplateHeight = iconHeight;
-        }
-        if (!ModelPartBatcher.INSTANCE.queueSkippedHeldGlint(glintTemplate)) return false;
+    /** Checks whether can queue skipped glint. */
+    public static boolean canQueueSkippedGlint() {
+        return basePart && BatchEligibility.batchingAllowed();
+    }
+
+    /** Queues skipped glint for DroppedItemInstancer. */
+    public static boolean queueSkippedGlint(int stripsWide, int stripsHigh, TesrMaterial material) {
+        if (!canQueueSkippedGlint()) return false;
+        final TemplateBuffer template = glintMesh.get(stripsWide, stripsHigh);
+        if (template == null || !ModelPartBatcher.INSTANCE.queueSkippedItemGlint(template, material)) return false;
         glintInstanced += 2;
         BatchEligibility.onPartQueued();
         BatchEligibility.onPartQueued();
         return true;
     }
 
+    /** Returns the block result for DroppedItemInstancer. */
     public static long block(ItemStack stack, RenderBlocks rb, Block block, int meta, float brightness, boolean unfilteredAtlas) {
+        final long part = itemBlock(stack, rb, block, meta, brightness, unfilteredAtlas);
+        if (part != SKIP) itemsDrawingBlocks++;
+        return part;
+    }
+
+    /** Ends block for DroppedItemInstancer. */
+    public static void endBlock(long part) {
+        if (part != SKIP) itemsDrawingBlocks--;
+        endPart(part);
+    }
+
+    /** Returns the direct block result for DroppedItemInstancer. */
+    public static long directBlock(RenderBlocks rb, Block block, int meta, float brightness) {
+        if (itemsDrawingBlocks != 0 || !ModelPartBatcher.INSTANCE.entitiesActive()) return RUN;
+        if (!BatchEligibility.batchingAllowed()) return GLStateManager.drawCalls;
+        final TesrMaterial material = EntityMaterials.itemFromCurrentState(false);
+        return material != null ? batchBlock(material, rb, block, meta, brightness) : GLStateManager.drawCalls;
+    }
+
+    /** Returns the item block result for DroppedItemInstancer. */
+    private static long itemBlock(ItemStack stack, RenderBlocks rb, Block block, int meta, float brightness, boolean unfilteredAtlas) {
         final TesrMaterial material = material(stack, unfilteredAtlas);
         if (material == null) {
             return RUN;
@@ -246,6 +270,12 @@ public final class DroppedItemInstancer {
         }
     }
 
+    /** Updates forget item draws state for DroppedItemInstancer. */
+    public static void forgetItemDraws() {
+        itemsDrawingBlocks = 0;
+    }
+
+    /** Clears DroppedItemInstancer state for DroppedItemInstancer. */
     public static void clear() {
         icons.clear();
         blocks.clear();
@@ -253,10 +283,25 @@ public final class DroppedItemInstancer {
         basePart = false;
         glintCapture.reset();
         glintSeen = false;
-        glintTemplate = null;
+        glintMesh.template = null;
         if (blockBackend != null) {
             blockBackend.delete();
             blockBackend = null;
+        }
+    }
+
+    private static final class GlintMesh {
+        TemplateBuffer template;
+        int stripsWide, stripsHigh;
+
+        /** Returns the get result for DroppedItemInstancer. */
+        TemplateBuffer get(int stripsWide, int stripsHigh) {
+            if (template == null || this.stripsWide != stripsWide || this.stripsHigh != stripsHigh) {
+                template = iconTemplate(0.0F, 0.0F, 1.0F, 1.0F, stripsWide, stripsHigh, 0.0625F);
+                this.stripsWide = stripsWide;
+                this.stripsHigh = stripsHigh;
+            }
+            return template;
         }
     }
 
@@ -305,12 +350,10 @@ public final class DroppedItemInstancer {
         return blocks.get(blockKey);
     }
 
+    /** Returns the block state bail result for DroppedItemInstancer. */
     private static BailReason blockStateBail(RenderBlocks renderBlocks, Block block, float brightness) {
         if (BlockRenderListManager.isISBRH(block.getRenderType())) return BailReason.ISBRH;
-        if (renderBlocks.enableAO || renderBlocks.overrideBlockTexture != null || brightness != 1.0F || !renderBlocks.useInventoryTint
-            || renderBlocks.blockAccess != null || (renderBlocks.uvRotateEast | renderBlocks.uvRotateWest | renderBlocks.uvRotateSouth
-                | renderBlocks.uvRotateNorth | renderBlocks.uvRotateTop | renderBlocks.uvRotateBottom) != 0) return BailReason.BLOCK_STATE;
-        return null;
+        return BlockRenderListManager.rendersPlainItem(renderBlocks, block, brightness) ? null : BailReason.BLOCK_STATE;
     }
 
     private static final class IconMesh {

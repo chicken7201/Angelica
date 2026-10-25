@@ -166,6 +166,20 @@ public class CapturedRenderingState {
 		applyCurrentEntityColor(r, g, b, a);
 	}
 
+	/** Saves current entity, item, block entity and overlay state. */
+	public void pushEntityState() {
+		pushCurrentEntityAndItem();
+		pushCurrentBlockEntity();
+		pushCurrentEntityColor();
+	}
+
+	/** Restores entity, item, block entity and overlay state from its stack. */
+	public void popEntityState() {
+		popCurrentEntityColor();
+		popCurrentBlockEntity();
+		popCurrentEntityAndItem();
+	}
+
 	private void applyCurrentEntityColor(float r, float g, float b, float a) {
 		if (currentEntityColor.equals(r, g, b, a)) return;
         this.currentEntityColor.set(r, g, b, a);

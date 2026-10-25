@@ -1,15 +1,19 @@
 package com.gtnewhorizons.angelica.rendering.tesr;
 
 import com.gtnewhorizons.angelica.compat.mojang.RenderLayer;
+import com.gtnewhorizons.angelica.rendering.items.DroppedItemInstancer;
 import com.gtnewhorizons.angelica.rendering.particles.ParticleInstancer;
 
 public final class TesrLifecycle {
 
     private TesrLifecycle() {}
 
+    /** Resets TesrLifecycle state for TesrLifecycle. */
     public static void reset() {
         TesrBatchRenderer.INSTANCE.clearRetained();
         ModelPartBatcher.INSTANCE.clear();
+        EntityTextureAtlas.INSTANCE.clear();
+        DroppedItemInstancer.forgetItemDraws();
         ParticleInstancer.clear();
 
         RenderLayer.clearInterningAndHooks();

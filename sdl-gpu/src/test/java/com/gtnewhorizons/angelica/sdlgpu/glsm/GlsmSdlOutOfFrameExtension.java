@@ -1,12 +1,12 @@
 package com.gtnewhorizons.angelica.sdlgpu.glsm;
 
+import com.gtnewhorizons.angelica.glsm.GlsmRedirectAgent;
 import org.junit.jupiter.api.extension.AfterEachCallback;
 import org.junit.jupiter.api.extension.BeforeAllCallback;
 import org.junit.jupiter.api.extension.BeforeEachCallback;
 import org.junit.jupiter.api.extension.ExtensionContext;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public final class GlsmSdlOutOfFrameExtension implements BeforeAllCallback, BeforeEachCallback, AfterEachCallback {
 
@@ -21,9 +21,10 @@ public final class GlsmSdlOutOfFrameExtension implements BeforeAllCallback, Befo
         assertFalse(GlsmSdlHeadlessRig.frameManager().isFrameActive(), "test must start with no active frame");
     }
 
+    /** Checks and restores the rendering fixture after the test lifecycle phase. */
     @Override
     public void afterEach(ExtensionContext context) {
         GlsmSdlHeadlessRig.endFrame();
-        assertTrue(GlsmSdlRedirectAgent.failures().isEmpty(), () -> "redirect agent recorded failures: " + GlsmSdlRedirectAgent.failures());
+        GlsmRedirectAgent.assertNoFailures();
     }
 }

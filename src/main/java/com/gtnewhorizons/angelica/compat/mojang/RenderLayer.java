@@ -7,6 +7,7 @@ import com.gtnewhorizons.angelica.api.tesr.TesrShader;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.hooks.TextureUtilHooks;
 import com.gtnewhorizons.angelica.rendering.tesr.DrawState;
+import com.gtnewhorizons.angelica.rendering.tesr.TesrShaderPrograms;
 import com.gtnewhorizons.angelica.shadercompat.ShaderGlint;
 import it.unimi.dsi.fastutil.Hash;
 import it.unimi.dsi.fastutil.objects.ObjectOpenCustomHashSet;
@@ -46,7 +47,7 @@ public final class RenderLayer implements BlendingStateHolder {
     private static final Hook BEACON_BEAM_HOOK = new Hook(
         () -> GbufferPrograms.setupSpecialRenderCondition(SpecialCondition.BEACON_BEAM),
         GbufferPrograms::teardownSpecialRenderCondition);
-    private static final Reference2ObjectOpenHashMap<TesrShader, Hook> SHADER_HOOKS = new Reference2ObjectOpenHashMap<>();
+    private static final Reference2ObjectOpenHashMap<TesrShader, Reference2ObjectOpenHashMap<PassOverride, Hook[]>> SHADER_HOOKS = new Reference2ObjectOpenHashMap<>();
     private static final Reference2ObjectOpenHashMap<PassOverride, Hook> PASS_HOOKS = new Reference2ObjectOpenHashMap<>();
 
     private String name;
@@ -98,9 +99,10 @@ public final class RenderLayer implements BlendingStateHolder {
         return build(texture, material, PassOverride.NONE, 0.0f, 0.0f, ShaderGlint.NO_TINT, cull, lit, lightmap, true, false);
     }
 
+    /** Builds RenderLayer state for RenderLayer. */
     private static RenderLayer build(ResourceLocation texture, TesrMaterial material, PassOverride pass, float offsetFactor, float offsetUnits, int glintSlot, int cull, boolean lit, boolean lightmap, boolean noPass, boolean afterGlint) {
         final DrawState state = DrawState.forMaterial(material, cull, lit, lightmap, offsetFactor, offsetUnits);
-        final Hook hook = hookFor(material, noPass ? PassOverride.NONE : pass, glintSlot);
+        final Hook hook = hookFor(material, noPass ? PassOverride.NONE : pass, glintSlot, state.isLightmap());
         final TransparencyType transparency = afterGlint ? TransparencyType.AFTER_GLINT : transparencyFor(state.getBlend());
         final RenderLayer candidate = new RenderLayer(null, BatchVertexFormats.POSITION_COLOR_TEXTURE_LIGHTF_NORMAL,
             GL11.GL_QUADS, TESR_BUFFER_SIZE, state, texture, material.isUnfilteredAtlas(), transparency, hook,
@@ -129,10 +131,6 @@ public final class RenderLayer implements BlendingStateHolder {
         }
     }
 
-    public static int cacheSize() {
-        return CACHE.size();
-    }
-
     private static TransparencyType transparencyFor(int blend) {
         return switch (blend) {
             case DrawState.OPAQUE -> TransparencyType.OPAQUE;
@@ -141,9 +139,10 @@ public final class RenderLayer implements BlendingStateHolder {
         };
     }
 
-    private static Hook hookFor(TesrMaterial material, PassOverride pass, int glintSlot) {
+    /** Returns the hook for result for RenderLayer. */
+    private static Hook hookFor(TesrMaterial material, PassOverride pass, int glintSlot, boolean lightmap) {
         switch (material.special()) {
-            case GLINT -> {
+            case GLINT, ITEM_GLINT -> {
                 return glintHook(glintSlot);
             }
             case BEACON_BEAM -> {
@@ -152,7 +151,7 @@ public final class RenderLayer implements BlendingStateHolder {
             case NONE -> {
                 final TesrShader shader = material.shader();
                 if (shader != null) {
-                    return shaderHook(shader);
+                    return shaderHook(shader, pass, lightmap);
                 }
             }
         }
@@ -171,11 +170,41 @@ public final class RenderLayer implements BlendingStateHolder {
         return hook;
     }
 
-    private static Hook shaderHook(TesrShader shader) {
-        Hook hook = SHADER_HOOKS.get(shader);
+    /** Returns the shader hook result for RenderLayer. */
+    private static Hook shaderHook(TesrShader shader, PassOverride pass, boolean lightmap) {
+        Reference2ObjectOpenHashMap<PassOverride, Hook[]> byPass = SHADER_HOOKS.get(shader);
+        if (byPass == null) {
+            byPass = new Reference2ObjectOpenHashMap<>();
+            SHADER_HOOKS.put(shader, byPass);
+        }
+        Hook[] byLightmap = byPass.get(pass);
+        if (byLightmap == null) {
+            byLightmap = new Hook[2];
+            byPass.put(pass, byLightmap);
+        }
+        final int slot = lightmap ? 1 : 0;
+        Hook hook = byLightmap[slot];
         if (hook == null) {
-            hook = new Hook(shader.bind(), shader.release());
-            SHADER_HOOKS.put(shader, hook);
+            final Hook packHook = pass == PassOverride.NONE ? null : passHook(pass);
+            final TesrShaderPrograms.Entry entry = TesrShaderPrograms.entry(shader);
+            final boolean[] packDrew = new boolean[1];
+            final Runnable bind = shader.bind() != null ? shader.bind() : () -> TesrShaderPrograms.bindBaked(entry, lightmap);
+            final Runnable release = shader.release() != null ? shader.release() : () -> TesrShaderPrograms.release(entry);
+            hook = new Hook(() -> {
+                packDrew[0] = TesrShaderPrograms.packActive();
+                if (!packDrew[0]) {
+                    bind.run();
+                } else if (packHook != null) {
+                    packHook.begin.run();
+                }
+            }, () -> {
+                if (!packDrew[0]) {
+                    release.run();
+                } else if (packHook != null) {
+                    packHook.end.run();
+                }
+            });
+            byLightmap[slot] = hook;
         }
         return hook;
     }

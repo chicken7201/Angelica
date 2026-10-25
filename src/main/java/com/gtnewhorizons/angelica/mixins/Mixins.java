@@ -211,10 +211,20 @@ public enum Mixins implements IMixins {
             "angelica.entity.MixinRendererLivingEntity_GlintClock",
             "angelica.entity.MixinRendererLivingEntity_ModelPassDraws",
             "angelica.entity.MixinRender_BatchEligibility",
+            "angelica.entity.MixinRender_EntityFireBatch",
             "angelica.entity.MixinRender_NameTagDraws",
             "angelica.entity.MixinRender_ShadowBatch",
             "angelica.entity.MixinTextureManager",
             "angelica.tesr.MixinTileEntitySpecialRenderer_BatchEligibility"
+        )
+    ),
+
+    ANGELICA_ENTITY_SHADOW_REPLAY(new MixinBuilder("Replay entity draws recorded in the shader shadow pass in the main view instead of running each entity renderer again")
+        .setPhase(Phase.EARLY)
+        .setApplyIf(() -> AngelicaConfig.enableIris && AngelicaConfig.entityShadowReplayEnabled())
+        .addClientMixins(
+            "angelica.entity.MixinBossStatus_EntityReplay",
+            "angelica.entity.MixinRenderGlobal_EntityReplay"
         )
     ),
 
@@ -671,6 +681,11 @@ public enum Mixins implements IMixins {
         .addExcludedMod(TargetedMod.LUMI)
         .setApplyIf(() -> AngelicaConfig.optimizeWorldUpdateLight)
         .addCommonMixins("angelica.lighting.MixinWorld_FixLightUpdateLag")),
+
+    TESR_LIGHT_CACHE(new MixinBuilder("Cache the tile-entity dispatcher's per-tile lightmap lookup for one tick")
+        .setPhase(Phase.EARLY)
+        .setApplyIf(() -> AngelicaConfig.enableTESRLightCache)
+        .addClientMixins("angelica.lighting.MixinTileEntityRendererDispatcher_LightCache")),
 
     SPEEDUP_VANILLA_ANIMATIONS(new MixinBuilder()
         .setPhase(Phase.EARLY)

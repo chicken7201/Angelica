@@ -272,7 +272,7 @@ public abstract class AngelicaChunkBuilderMeshingTask extends ChunkBuilderTask<C
                                 }
                             } else {
                                 // Normal block rendering
-                                canRender = block.canRenderInPass(pass);
+                                canRender = !canRenderOffThread || block.canRenderInPass(pass);
                             }
 
                             if (canRender) {
@@ -413,6 +413,10 @@ public abstract class AngelicaChunkBuilderMeshingTask extends ChunkBuilderTask<C
                 final DeferredBlock deferred = blocks.get(i);
                 blockPos.set(deferred.x(), deferred.y(), deferred.z());
                 slice.setRenderingBlock(deferred.block());
+                if (!deferred.isShaderPackOverride()) {
+                    setRenderPass(deferred.pass());
+                    if (!deferred.block().canRenderInPass(deferred.pass())) continue;
+                }
                 renderBlock(deferred.block(), deferred.meta(), deferred.x(), deferred.y(), deferred.z(), deferred.pass(),
                     tessellator, renderBlocks, m.buffers, ctx, blockRenderContext, minX, minY, minZ,
                     deferred.materialOverride(), deferred.isShaderPackOverride(), m.teMap, m.currentTick);
@@ -446,6 +450,7 @@ public abstract class AngelicaChunkBuilderMeshingTask extends ChunkBuilderTask<C
         }
     }
 
+    /** Builds one block mesh with the current chunk rendering context. */
     protected void renderBlock(Block block, int metadata, int x, int y, int z, int pass, Tessellator tessellator, RenderBlocks renderBlocks, ChunkBuildBuffers buffers, AngelicaChunkBuildContext buildContext, BlockRenderContext blockRenderContext, int originX, int originY, int originZ, Material materialOverride, boolean isShaderPackOverride, NbtConditionalIdMap<Block> teMap, long currentTick) {
 
         final var blockMaterial = block.getMaterial();
@@ -494,7 +499,7 @@ public abstract class AngelicaChunkBuilderMeshingTask extends ChunkBuilderTask<C
                         if (te != null) {
                             final NBTTagCompound teNbt = new NBTTagCompound();
                             te.writeToNBT(teNbt);
-                            teBlockId = teMap.resolve(block, teNbt);
+                            teBlockId = teMap.resolve(block, teNbt, metadata);
                         } else {
                             teBlockId = -1;
                         }

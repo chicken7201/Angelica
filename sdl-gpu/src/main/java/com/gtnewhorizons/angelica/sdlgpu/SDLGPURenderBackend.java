@@ -1367,6 +1367,7 @@ public class SDLGPURenderBackend extends RenderBackend {
         computeBinder.endBatchPassIfOpen(st);
     }
 
+    /** Copies buffer sub data for SDLGPURenderBackend. */
     @Override public void copyBufferSubData(int readTarget, int writeTarget, long readOffset, long writeOffset, long size) {
         final int srcGlId = getBoundBuffer(readTarget);
         final int dstGlId = getBoundBuffer(writeTarget);
@@ -1381,6 +1382,37 @@ public class SDLGPURenderBackend extends RenderBackend {
         resourceManager.dropEboShadow(dstGlId);
         resourceManager.markBufferContentsDefined(dstGlId);
         readbackShadows.invalidate(dstGlId, writeOffset);
+
+        final ByteBuffer dstUboShadow = resourceManager.getUboShadow(dstGlId);
+        if (dstUboShadow != null) {
+            final ByteBuffer dstSlice = dstUboShadow.duplicate();
+            dstSlice.position((int) writeOffset).limit((int) (writeOffset + size));
+            if (!readUboStore(srcGlId, readOffset, dstSlice, (int) size)) {
+                final long srcHandle = resourceManager.getBufferHandle(srcGlId);
+                if (srcHandle != 0) downloadBufferBlocking(srcHandle, (int) readOffset, (int) size, dstSlice);
+            }
+            s().uboRangeGen++;
+            return;
+        }
+        if (resourceManager.getUboShadow(srcGlId) != null) {
+            final long dstHandle = resourceManager.getBufferHandle(dstGlId);
+            if (dstHandle != 0) {
+                final ByteBuffer buf = MemoryUtil.memAlloc((int) size);
+                try {
+                    if (readUboStore(srcGlId, readOffset, buf, (int) size)) {
+                        buf.position(0).limit((int) size);
+                        if (s().deferUploads) {
+                            enqueuePreCopied(buf, dstHandle, writeOffset, false);
+                        } else if (frameManager.getCommandBuffer() != 0) {
+                            resourceManager.uploadToBuffer(frameManager.ensureCopyPass(), buf, dstHandle, writeOffset, false);
+                        }
+                    }
+                } finally {
+                    MemoryUtil.memFree(buf);
+                }
+                return;
+            }
+        }
 
         if (s().deferUploads) {
             final long dstHandle = resourceManager.getBufferHandle(dstGlId);
@@ -1529,8 +1561,9 @@ public class SDLGPURenderBackend extends RenderBackend {
         return isProxyTarget(target) ? 0 : st.boundTextures[st.activeTextureUnit];
     }
 
-    private int requestedMipLevels(int glId) {
-        return Math.max(1, resourceManager.getOrCreateTexSamplerState(glId).maxLevel + 1);
+    /** Returns the requested mip levels result for SDLGPURenderBackend. */
+    private int requestedMipLevels(int glId, int width, int height) {
+        return Math.max(1, Math.min(resourceManager.getOrCreateTexSamplerState(glId).maxLevel + 1, PixelOps.defaultMipLevels(width, height)));
     }
 
     private int fullMipLevels(int glId, int width, int height) {
@@ -1547,8 +1580,9 @@ public class SDLGPURenderBackend extends RenderBackend {
         return resourceManager.ensureTextureLevels(glId, wanted);
     }
 
+    /** Prepares level0 storage for SDLGPURenderBackend. */
     private void ensureLevel0Storage(ContextState st, int glId, int target, int internalFormat, int width, int height, int depth, int format, boolean mipmapped) {
-        final int numLevels = mipmapped ? requestedMipLevels(glId) : 1;
+        final int numLevels = mipmapped ? requestedMipLevels(glId, width, height) : 1;
         final boolean bgraSwizzle = format == GL12.GL_BGRA && (internalFormat == GL11.GL_RGBA || internalFormat == GL11.GL_RGBA8);
         final int targetSdlFormat = bgraSwizzle
             ? SDLGPU.SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM
@@ -1566,6 +1600,16 @@ public class SDLGPURenderBackend extends RenderBackend {
         resourceManager.refreshTextureReferences(glId);
     }
 
+    /** Returns the drop storage if empty result for SDLGPURenderBackend. */
+    private boolean dropStorageIfEmpty(ContextState st, int glId, int level, int width, int height, int depth) {
+        if (width > 0 && height > 0 && depth > 0) return false;
+        if (level == 0) {
+            textureOps.releaseTextureForRealloc(st, glId);
+            resourceManager.refreshTextureReferences(glId);
+        }
+        return true;
+    }
+
     private static boolean canReuseTexture(ResourceManager.TextureMeta m, long handle, int target, int glFormat, int sdlFormat, int w, int h, int d, int levels) {
         return m != null
             && handle != 0
@@ -1578,6 +1622,7 @@ public class SDLGPURenderBackend extends RenderBackend {
             && m.sdlFormat() == sdlFormat;
     }
 
+    /** Updates tex image2 d state for SDLGPURenderBackend. */
     @Override public void texImage2D(int target, int level, int internalFormat, int width, int height, int border, int format, int type, ByteBuffer pixels) {
         final ContextState st = s();
         if (isProxyTarget(target)) {
@@ -1585,7 +1630,7 @@ public class SDLGPURenderBackend extends RenderBackend {
             return;
         }
         final int glId = st.boundTextures[st.activeTextureUnit];
-        if (glId == 0) return;
+        if (glId == 0 || dropStorageIfEmpty(st, glId, level, width, height, 1)) return;
 
         if (level == 0) {
             ensureLevel0Storage(st, glId, target, internalFormat, width, height, 1, format, true);
@@ -1604,6 +1649,7 @@ public class SDLGPURenderBackend extends RenderBackend {
     @Override public void texImage2D(int target, int level, int internalFormat, int width, int height, int border, int format, int type, IntBuffer pixels) {
         texImage2D(target, level, internalFormat, width, height, border, format, type, pixels != null ? MemoryUtil.memByteBuffer(pixels) : (ByteBuffer) null);
     }
+    /** Updates tex image3 d state for SDLGPURenderBackend. */
     @Override public void texImage3D(int target, int level, int internalFormat, int width, int height, int depth, int border, int format, int type, ByteBuffer pixels) {
         final ContextState st = s();
         if (isProxyTarget(target)) {
@@ -1611,7 +1657,7 @@ public class SDLGPURenderBackend extends RenderBackend {
             return;
         }
         final int glId = st.boundTextures[st.activeTextureUnit];
-        if (glId == 0) return;
+        if (glId == 0 || dropStorageIfEmpty(st, glId, level, width, height, depth)) return;
 
         if (level == 0) {
             ensureLevel0Storage(st, glId, target, internalFormat, width, height, depth, GL11.GL_NONE, false);
@@ -1634,6 +1680,7 @@ public class SDLGPURenderBackend extends RenderBackend {
     @Override public void texImage3D(int target, int level, int internalFormat, int width, int height, int depth, int border, int format, int type, IntBuffer pixels) {
         texImage3D(target, level, internalFormat, width, height, depth, border, format, type, pixels != null ? MemoryUtil.memByteBuffer(pixels) : (ByteBuffer) null);
     }
+    /** Updates tex image1 d state for SDLGPURenderBackend. */
     @Override public void texImage1D(int target, int level, int internalFormat, int width, int border, int format, int type, ByteBuffer pixels) {
         final ContextState st = s();
         if (isProxyTarget(target)) {
@@ -1641,7 +1688,7 @@ public class SDLGPURenderBackend extends RenderBackend {
             return;
         }
         final int glId = st.boundTextures[st.activeTextureUnit];
-        if (glId == 0) return;
+        if (glId == 0 || dropStorageIfEmpty(st, glId, level, width, 1, 1)) return;
 
         if (level == 0) {
             ensureLevel0Storage(st, glId, target, internalFormat, width, 1, 1, GL11.GL_NONE, false);
@@ -1650,6 +1697,7 @@ public class SDLGPURenderBackend extends RenderBackend {
         textureOps.uploadTextureRegion(st, glId, resourceManager.getTextureMeta(glId), resourceManager.getTextureHandle(glId),
             pixels, 0, 0, width, 1, level, format, type);
     }
+    /** Updates tex image2 d state for SDLGPURenderBackend. */
     @Override public void texImage2D(int target, int level, int internalFormat, int width, int height, int border, int format, int type, long pixelBufferOffset) {
         final ContextState st = s();
         if (isProxyTarget(target)) {
@@ -1657,7 +1705,7 @@ public class SDLGPURenderBackend extends RenderBackend {
             return;
         }
         final int glId = st.boundTextures[st.activeTextureUnit];
-        if (glId == 0) return;
+        if (glId == 0 || dropStorageIfEmpty(st, glId, level, width, height, 1)) return;
 
         if (level == 0) {
             ensureLevel0Storage(st, glId, target, internalFormat, width, height, 1, format, true);
@@ -1737,10 +1785,11 @@ public class SDLGPURenderBackend extends RenderBackend {
         textureOps.copyTexSubImageImpl(cs, boundTextureFor(cs, target), level, xoffset, yoffset, x, y, width, height);
     }
 
+    /** Copies tex image2 d for SDLGPURenderBackend. */
     @Override public void copyTexImage2D(int target, int level, int internalFormat, int x, int y, int width, int height, int border) {
         final ContextState cs = s();
         final int destGlId = boundTextureFor(cs, target);
-        if (destGlId == 0) return;
+        if (destGlId == 0 || dropStorageIfEmpty(cs, destGlId, level, width, height, 1)) return;
 
         if (level == 0) {
             ensureLevel0Storage(cs, destGlId, target, internalFormat, width, height, 1, GL11.GL_NONE, true);
@@ -1867,6 +1916,7 @@ public class SDLGPURenderBackend extends RenderBackend {
         if (readBound) bindFramebuffer(GL30.GL_READ_FRAMEBUFFER, 0);
     }
 
+    /** Binds framebuffer for SDLGPURenderBackend. */
     @Override public void bindFramebuffer(int target, int framebuffer) {
         final ContextState cs = s();
         if (framebuffer == 0) framebuffer = cs.defaultFboId;
@@ -1884,6 +1934,8 @@ public class SDLGPURenderBackend extends RenderBackend {
         }
 
         if (cs.boundFboId == framebuffer) return;
+        final FboState drawing = framebuffer != 0 ? resourceManager.getFbo(framebuffer) : null;
+        if (drawing != null && drawing.readOnlyColor) makeColorTargets(drawing);
         final int oldFboId = cs.boundFboId;
         final boolean structurallyIdentical = oldFboId != 0 && framebuffer != 0 && fboClearTracker.fbosHaveSameAttachments(cs, oldFboId, framebuffer);
         cs.boundFboId = framebuffer;
@@ -1896,36 +1948,54 @@ public class SDLGPURenderBackend extends RenderBackend {
             cs.pipeline.setColorTargetFormats(cachedSwapchainFormatArray);
             cs.pipeline.setDrawBuffers(null);
             cs.pipeline.setDepthTargetFormat(resourceManager.getSwapchainDepthStencilFormat());
-        } else {
-            final FboState fbo = resourceManager.getFbo(framebuffer);
-            if (fbo != null && fbo.getColorTexture() != 0) {
-                fboClearTracker.updatePipelineCacheColorFormats(cs, fbo);
-                cs.pipeline.setDepthTargetFormat(fbo.depthTexture != 0 ? fbo.depthFormat : 0);
-            }
+        } else if (drawing != null && drawing.getColorTexture() != 0) {
+            fboClearTracker.updatePipelineCacheColorFormats(cs, drawing);
+            cs.pipeline.setDepthTargetFormat(drawing.depthTexture != 0 ? drawing.depthFormat : 0);
         }
         cs.pipeline.markOutputDirty();
     }
 
+    /** Creates color targets for SDLGPURenderBackend. */
+    private void makeColorTargets(FboState fbo) {
+        for (int i = 0; i < fbo.colorAttachmentCount; i++) {
+            final int glId = fbo.colorGlIds[i];
+            if (glId == 0) continue;
+            fbo.colorTextures[i] = resourceManager.ensureTextureUsage(glId, SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET);
+            resourceManager.markFboAttachment(glId);
+        }
+        fbo.readOnlyColor = false;
+        fbo.targetsDirty = true;
+    }
+
+    /** Updates framebuffer texture2 d state for SDLGPURenderBackend. */
     @Override public void framebufferTexture2D(int target, int attachment, int textarget, int texture, int level) {
         final ContextState cs = s();
-        if (cs.boundFboId == cs.defaultFboId) return;
-        final FboState fbo = resourceManager.getFbo(cs.boundFboId);
+        final int fboId = target == GL30.GL_READ_FRAMEBUFFER ? cs.boundReadFboId : cs.boundFboId;
+        if (fboId == cs.defaultFboId) return;
+        final FboState fbo = resourceManager.getFbo(fboId);
         if (fbo == null) return;
+        final boolean drawTarget = fboId == cs.boundFboId;
 
         final int colorIdx = attachment - GL30.GL_COLOR_ATTACHMENT0;
         if (colorIdx >= 0 && colorIdx < ContextState.MAX_COLOR_ATTACHMENTS) {
             if (texture == 0) {
                 fbo.detachColor(colorIdx);
-                fboClearTracker.updatePipelineCacheColorFormats(cs, fbo);
-                cs.pipeline.markOutputDirty();
+                if (drawTarget) {
+                    fboClearTracker.updatePipelineCacheColorFormats(cs, fbo);
+                    cs.pipeline.markOutputDirty();
+                }
                 return;
             }
-            final long handle = resourceManager.ensureTextureUsage(texture, SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET);
+            final long handle = resourceManager.ensureTextureUsage(texture, drawTarget ? SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET : SDL_GPU_TEXTUREUSAGE_SAMPLER);
             final ResourceManager.TextureMeta meta = resourceManager.getTextureMeta(texture);
             fbo.colorTextures[colorIdx] = handle;
             fbo.colorGlIds[colorIdx] = texture;
             fbo.colorLevels[colorIdx] = level;
-            resourceManager.markFboAttachment(texture);
+            if (drawTarget) {
+                resourceManager.markFboAttachment(texture);
+            } else {
+                fbo.readOnlyColor = true;
+            }
             fbo.targetsDirty = true;
             if (meta != null) {
                 fbo.colorFormats[colorIdx] = meta.sdlFormat();
@@ -1936,16 +2006,20 @@ public class SDLGPURenderBackend extends RenderBackend {
             }
             fbo.colorAttachmentCount = Math.max(fbo.colorAttachmentCount, colorIdx + 1);
             fbo.cachedFormatsDirty = true;
-            fboClearTracker.updatePipelineCacheColorFormats(cs, fbo);
-            cs.pipeline.markOutputDirty();
+            if (drawTarget) {
+                fboClearTracker.updatePipelineCacheColorFormats(cs, fbo);
+                cs.pipeline.markOutputDirty();
+            }
         } else if (attachment == GL30.GL_DEPTH_ATTACHMENT || attachment == GL30.GL_DEPTH_STENCIL_ATTACHMENT || attachment == GL30.GL_STENCIL_ATTACHMENT) {
             final boolean stencilOnly = attachment == GL30.GL_STENCIL_ATTACHMENT;
             if (texture == 0) {
                 if (stencilOnly && fbo.depthGlId != 0) return;
                 fbo.detachDepth();
-                cs.pipeline.hasDepthTarget = false;
-                cs.pipeline.depthTargetFormat = 0;
-                cs.pipeline.markOutputDirty();
+                if (drawTarget) {
+                    cs.pipeline.hasDepthTarget = false;
+                    cs.pipeline.depthTargetFormat = 0;
+                    cs.pipeline.markOutputDirty();
+                }
                 return;
             }
             if (stencilOnly && fbo.depthGlId != 0 && fbo.depthGlId != texture) {
@@ -1965,10 +2039,27 @@ public class SDLGPURenderBackend extends RenderBackend {
             if (meta != null) {
                 fbo.depthFormat = meta.sdlFormat();
             }
-            cs.pipeline.hasDepthTarget = true;
-            cs.pipeline.depthTargetFormat = fbo.depthFormat;
-            cs.pipeline.markOutputDirty();
+            if (drawTarget) {
+                cs.pipeline.hasDepthTarget = true;
+                cs.pipeline.depthTargetFormat = fbo.depthFormat;
+                cs.pipeline.markOutputDirty();
+            }
         }
+    }
+
+    /** Updates framebuffer texture1 d state for SDLGPURenderBackend. */
+    @Override public void framebufferTexture1D(int target, int attachment, int textarget, int texture, int level) {
+        framebufferTexture2D(target, attachment, GL11.GL_TEXTURE_2D, texture, level);
+    }
+
+    /** Updates framebuffer texture3 d state for SDLGPURenderBackend. */
+    @Override public void framebufferTexture3D(int target, int attachment, int textarget, int texture, int level, int zoffset) {
+        throw new UnsupportedOperationException("SDL-GPU FboState attachments store only texture and mip level; no depth-plane (layer_or_depth_plane) slot for glFramebufferTexture3D");
+    }
+
+    /** Updates framebuffer texture layer state for SDLGPURenderBackend. */
+    @Override public void framebufferTextureLayer(int target, int attachment, int texture, int level, int layer) {
+        throw new UnsupportedOperationException("SDL-GPU FboState attachments store only texture and mip level; no array-layer slot for glFramebufferTextureLayer");
     }
 
     @Override public void framebufferTexture(int target, int attachment, int texture, int level) {
@@ -2968,6 +3059,7 @@ public class SDLGPURenderBackend extends RenderBackend {
         respecifyStore(cs, target, glId, size, usage);
     }
 
+    /** Updates respecify store state for SDLGPURenderBackend. */
     private void respecifyStore(ContextState cs, int target, int glId, long size, int usage) {
         freePlainMappingFor(glId, true);
         resourceManager.recordBufferGlParams(glId, usage, BufferParams.MUTABLE_STORE);
@@ -2978,6 +3070,7 @@ public class SDLGPURenderBackend extends RenderBackend {
                 final ByteBuffer shadow = resourceManager.getOrAllocUboShadow(glId, (int) size);
                 shadow.position(0).limit((int) size);
                 for (int i = 0; i < (int) size; i += 8) shadow.putLong(i, 0L);
+                cs.uboRangeGen++;
             }
             return;
         }
@@ -3021,6 +3114,7 @@ public class SDLGPURenderBackend extends RenderBackend {
         respecifyStore(cs, target, glId, data, usage);
     }
 
+    /** Updates respecify store state for SDLGPURenderBackend. */
     private void respecifyStore(ContextState cs, int target, int glId, ByteBuffer data, int usage) {
         final long dataSize = data.remaining();
         freePlainMappingFor(glId, true);
@@ -3033,6 +3127,7 @@ public class SDLGPURenderBackend extends RenderBackend {
                 shadow.position(0).limit((int) dataSize);
                 shadow.put(src);
                 shadow.position(0).limit((int) dataSize);
+                cs.uboRangeGen++;
             }
             return;
         }
@@ -3111,6 +3206,7 @@ public class SDLGPURenderBackend extends RenderBackend {
         MemoryUtil.memFree(buf);
     }
 
+    /** Updates buffer sub data state for SDLGPURenderBackend. */
     @Override public void bufferSubData(int target, long offset, ByteBuffer data) {
         final ContextState cs = s();
         final int glId = cs.getBoundBuffer(target);
@@ -3118,12 +3214,13 @@ public class SDLGPURenderBackend extends RenderBackend {
         if (target == GL31.GL_UNIFORM_BUFFER) {
             final ByteBuffer shadow = resourceManager.getUboShadow(glId);
             if (shadow != null) {
-                if (offset < 0 || offset + data.remaining() > shadow.capacity()) {
+                if (offset < 0 || offset + data.remaining() > resourceManager.getBufferSize(glId)) {
                     warnInvalidBufferOp("glBufferSubData out of range on uniform buffer", glId);
                     return;
                 }
                 shadow.position(0);
                 ByteRegionCopy.copyByteRegion(data, data.position(), shadow, (int) offset, data.remaining());
+                cs.uboRangeGen++;
             }
             return;
         }
@@ -3188,6 +3285,7 @@ public class SDLGPURenderBackend extends RenderBackend {
         return mapBufferRange(target, 0, length, BufferParams.accessEnumToBits(access));
     }
 
+    /** Returns the unmap buffer result for SDLGPURenderBackend. */
     @Override public boolean unmapBuffer(int target) {
         final ContextState cs = s();
         final int glId = cs.getBoundBuffer(target);
@@ -3232,6 +3330,7 @@ public class SDLGPURenderBackend extends RenderBackend {
                 shadow.put(staging);
                 shadow.position(0).limit(shadow.capacity());
                 resourceManager.markBufferContentsDefined(glId);
+                cs.uboRangeGen++;
             }
             MemoryUtil.memFree(staging);
             return true;
@@ -3318,8 +3417,13 @@ public class SDLGPURenderBackend extends RenderBackend {
         return staging;
     }
 
+    /** Updates seed mapped staging state for SDLGPURenderBackend. */
     private void seedMappedStaging(int target, int glId, long offset, long length, ByteBuffer staging) {
         final int len = (int) length;
+        if (readUboStore(glId, offset, staging, len)) {
+            staging.position(0).limit(len);
+            return;
+        }
         final long handle = resourceManager.getBufferHandle(glId);
 
         if (handle == 0 || resourceManager.hasUndefinedContents(glId)) {
@@ -3328,7 +3432,6 @@ public class SDLGPURenderBackend extends RenderBackend {
         }
 
         final ByteBuffer direct = switch (target) {
-            case GL31.GL_UNIFORM_BUFFER -> resourceManager.getUboShadow(glId);
             case GL30.GL_PIXEL_UNPACK_BUFFER -> resourceManager.getPboStaging(glId);
             default -> null;
         };
@@ -3429,17 +3532,33 @@ public class SDLGPURenderBackend extends RenderBackend {
     private void recordImmutableStorage(int glId, int flags) {
         resourceManager.recordBufferGlParams(glId, GL15.GL_DYNAMIC_DRAW, flags);
     }
+    /** Returns buffer sub data for SDLGPURenderBackend. */
     @Override public void getBufferSubData(int target, long offset, ByteBuffer data) {
         final int glId = getBoundBuffer(target);
         if (glId == 0 || data == null) return;
+        final int rem = data.remaining();
+        if (readUboStore(glId, offset, data, rem)) return;
         final long handle = resourceManager.getBufferHandle(glId);
         if (handle == 0) return;
-        final int rem = data.remaining();
 
         if (readbackShadows.serve(glId, offset, data, rem)) return;
         if (readBufferRangeCpuFirst(target, glId, handle, offset, data, rem)) return;
 
         downloadBufferBlocking(handle, (int) offset, rem, data);
+    }
+
+    /** Reads ubo store for SDLGPURenderBackend. */
+    private boolean readUboStore(int glId, long offset, ByteBuffer dst, int len) {
+        final ByteBuffer shadow = resourceManager.getUboShadow(glId);
+        if (shadow == null) return false;
+        final PersistentMapping pm = resourceManager.getPersistentMapping(glId);
+        if (pm != null && pm.covers(offset, len)) {
+            serveFromShadow(pm.staging, (int) pm.stagingIndex(offset), dst, len);
+            return true;
+        }
+        if (offset < 0 || offset + len > resourceManager.getBufferSize(glId)) return false;
+        serveFromShadow(shadow, (int) offset, dst, len);
+        return true;
     }
 
     private void downloadBufferBlocking(long handle, int offset, int size, ByteBuffer out) {
@@ -3758,9 +3877,11 @@ public class SDLGPURenderBackend extends RenderBackend {
         SDL_GenerateMipmapsForGPUTexture(frameManager.getCommandBuffer(), texHandle);
         resourceManager.markTextureWritten(texHandle);
     }
+    /** Updates texture image2 dext state for SDLGPURenderBackend. */
     @Override public void textureImage2DEXT(int texture, int target, int level, int internalformat, int width, int height, int border, int format, int type, ByteBuffer pixels) {
         if (texture == 0) return;
         final ContextState st = s();
+        if (dropStorageIfEmpty(st, texture, level, width, height, 1)) return;
         if (level == 0) {
             ensureLevel0Storage(st, texture, target, internalformat, width, height, 1, format, true);
         } else if (!growForLevel(texture, level)) {
@@ -3980,6 +4101,7 @@ public class SDLGPURenderBackend extends RenderBackend {
     }
 
 
+    /** Returns texture parameteri for SDLGPURenderBackend. */
     @Override public int getTextureParameteri(int texture, int target, int pname) {
         final TextureSamplerState ss = resourceManager.getTexSamplerState(texture);
         if (ss == null) {
@@ -3997,7 +4119,7 @@ public class SDLGPURenderBackend extends RenderBackend {
             case GL11.GL_TEXTURE_WRAP_S -> ss.wrapS;
             case GL11.GL_TEXTURE_WRAP_T -> ss.wrapT;
             case GL12.GL_TEXTURE_WRAP_R -> ss.wrapR;
-            case GL12.GL_TEXTURE_MAX_LEVEL -> ss.maxLevel;
+            case GL12.GL_TEXTURE_MAX_LEVEL -> ss.maxLevel < 0 ? 1000 : ss.maxLevel;
             default -> 0;
         };
     }
@@ -4211,6 +4333,7 @@ public class SDLGPURenderBackend extends RenderBackend {
         }
         return true;
     }
+    /** Clears buffer sub data for SDLGPURenderBackend. */
     @Override public void clearBufferSubData(int target, int internalFormat, long offset, long size, int format, int type, ByteBuffer data) {
         final int glId = getBoundBuffer(target);
         if (glId == 0 || size <= 0) return;
@@ -4219,10 +4342,19 @@ public class SDLGPURenderBackend extends RenderBackend {
             warnInvalidBufferOp("glClearBufferSubData out of range", glId);
             return;
         }
+        final int elemBytes = Math.max(1, PixelOps.glPixelSize(format, type));
+        final ByteBuffer uboShadow = resourceManager.getUboShadow(glId);
+        if (uboShadow != null) {
+            for (int i = 0; i < (int) size; i++) {
+                final int e = i % elemBytes;
+                uboShadow.put((int) offset + i, data != null && e < data.remaining() ? data.get(data.position() + e) : 0);
+            }
+            s().uboRangeGen++;
+            return;
+        }
         final long handle = resourceManager.getBufferHandle(glId);
         if (handle == 0 || frameManager.getCommandBuffer() == 0) return;
 
-        final int elemBytes = Math.max(1, PixelOps.glPixelSize(format, type));
         final boolean defer = s().deferUploads && target != GL43.GL_SHADER_STORAGE_BUFFER;
         // Undeferred clears stage one large pattern and upload it repeatedly
         final int chunkBytes = (int) Math.min(size, defer ? CLEAR_CHUNK_BYTES : FILL_CHUNK_BYTES);
@@ -4580,11 +4712,10 @@ public class SDLGPURenderBackend extends RenderBackend {
         boundRenderbufferId = renderbuffer;
     }
 
+    /** Updates renderbuffer storage state for SDLGPURenderBackend. */
     @Override
     public void renderbufferStorage(int target, int internalformat, int width, int height) {
-        if (boundRenderbufferId == 0) return;
-        resourceManager.deleteTexture(boundRenderbufferId);
-        resourceManager.createTexture(boundRenderbufferId, GL11.GL_TEXTURE_2D, internalformat, width, height, 1, 1);
+        texStorageImpl(s(), boundRenderbufferId, GL11.GL_TEXTURE_2D, internalformat, width, height, 1, 1);
     }
 
     private boolean warnedMSAARenderbuffer = false;

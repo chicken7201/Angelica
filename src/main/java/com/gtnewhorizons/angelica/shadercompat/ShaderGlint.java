@@ -5,6 +5,7 @@ import com.gtnewhorizons.angelica.glsm.hooks.GLSMHooks;
 import com.gtnewhorizons.angelica.glsm.hooks.GlintColorHandler;
 import com.gtnewhorizons.angelica.iris.IrisDisplayListState;
 import com.gtnewhorizons.angelica.rendering.tesr.ModelPartBatcher;
+import com.gtnewhorizons.angelica.rendering.tesr.EntityShadowReplay;
 import it.unimi.dsi.fastutil.ints.Int2IntLinkedOpenHashMap;
 import net.coderbot.iris.pipeline.ShadowRenderer;
 import net.irisshaders.iris.api.v0.IrisApi;
@@ -57,7 +58,9 @@ public final class ShaderGlint {
 
     private ShaderGlint() {}
 
+    /** Begins glint for ShaderGlint. */
     public static void beginGlint() {
+        if (ShadowRenderer.ACTIVE) EntityShadowReplay.rejectShadowOnly();
         IrisDisplayListState.recordGlintSpan(true);
 
         // If a glint span is already active, keep the outer span's saved state and
@@ -119,8 +122,14 @@ public final class ShaderGlint {
         maskFailed = false;
     }
 
+    /** Binds tinted glint for ShaderGlint. */
     public static void bindTintedGlint(int slot) {
-        if (slot < 0 || ShadowRenderer.ACTIVE || !IrisApi.getInstance().isShaderPackInUse()) return;
+        if (slot < 0) return;
+        if (ShadowRenderer.ACTIVE) {
+            EntityShadowReplay.rejectShadowOnly();
+            return;
+        }
+        if (!IrisApi.getInstance().isShaderPackInUse()) return;
         final ITextureObject mask = Minecraft.getMinecraft().getTextureManager().getTexture(GLINT_MASK);
         if (mask == null || GLStateManager.getBoundTextureForServerState() != mask.getGlTextureId()) return;
         GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, slotTextures[slot]);

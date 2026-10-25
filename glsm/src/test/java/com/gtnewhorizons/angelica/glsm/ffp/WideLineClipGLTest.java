@@ -33,15 +33,14 @@ class WideLineClipGLTest {
     private int vao;
     private int vbo;
 
+    /** Updates up for WideLineClipGLTest. */
     @BeforeEach
     void setUp() {
-        FfpFixture.routeVertexFormats(true);
         savedEmulation = GLStateManager.wideLineEmulationEnabled;
         GLStateManager.wideLineEmulationEnabled = true;
 
         FfpFixture.resetFfpState();
-        ShaderManager.enable();
-        ShaderManager.getInstance().activate();
+        FfpFixture.activateFfp();
         GLStateManager.glViewport(0, 0, SIZE, SIZE);
         GLStateManager.glMatrixMode(GL11.GL_PROJECTION);
         GLStateManager.glLoadIdentity();
@@ -54,7 +53,6 @@ class WideLineClipGLTest {
 
     @AfterEach
     void tearDown() {
-        FfpFixture.routeVertexFormats(false);
         GLStateManager.wideLineEmulationEnabled = savedEmulation;
         GLStateManager.glLineWidth(1.0f);
         if (vbo != 0) { GLStateManager.glDeleteBuffers(vbo); vbo = 0; }

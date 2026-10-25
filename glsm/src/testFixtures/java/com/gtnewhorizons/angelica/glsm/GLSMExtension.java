@@ -59,8 +59,10 @@ public class GLSMExtension implements BeforeAllCallback, BeforeEachCallback, Aft
     private static final int EXPECTED_MODELVIEW_STACK_DEPTH = 1;
     private static final int EXPECTED_PROJECTION_STACK_DEPTH = 1;
 
+    /** Initializes the rendering fixture before the test lifecycle phase. */
     @Override
     public void beforeAll(ExtensionContext context) throws LWJGLException {
+        GlsmRedirectAgent.requireInstalled();
         if (startFailure != null) {
             throw new IllegalStateException("GLSMExtension context setup failed earlier in this JVM", startFailure);
         }
@@ -167,6 +169,7 @@ public class GLSMExtension implements BeforeAllCallback, BeforeEachCallback, Aft
         while (GL11.glGetError() != GL11.GL_NO_ERROR) {}
     }
 
+    /** Checks and restores the rendering fixture after the test lifecycle phase. */
     @Override
     public void afterEach(ExtensionContext context) throws Exception {
         boolean leakedRecorder = false;
@@ -179,6 +182,7 @@ public class GLSMExtension implements BeforeAllCallback, BeforeEachCallback, Aft
             fail("Test leaked an open display-list recorder! Missing glEndList.");
         }
 
+        GlsmRedirectAgent.assertNoFailures();
         final int error = GL11.glGetError();
         assertEquals(GL11.GL_NO_ERROR, error,
             () -> "GL Error: 0x" + Integer.toHexString(error));

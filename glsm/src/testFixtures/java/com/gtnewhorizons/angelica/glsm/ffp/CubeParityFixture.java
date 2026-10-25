@@ -246,6 +246,7 @@ public final class CubeParityFixture {
 
     private static int instanceVbo;
 
+    /** Draws instanced for CubeParityFixture. */
     public static void drawInstanced(Spec[] specs) {
         final ByteBuffer records = BufferUtils.createByteBuffer(specs.length * CubeInstancedAttribs.STRIDE);
         final long records0 = memAddress0(records);
@@ -260,7 +261,7 @@ public final class CubeParityFixture {
             InstancedAttribs.writeTail(ptr, 0xFFFFFFFF, 0, 0L);
             memPutFloat(ptr + CubeInstancedAttribs.OFFSET_LIGHTMAP_SCALE, BRIGHTNESS);
             memPutFloat(ptr + CubeInstancedAttribs.OFFSET_LIGHTMAP_SCALE + 4, BRIGHTNESS);
-            cube.writeTexture(ptr);
+            cube.writeTexture(ptr, 0.0f, 0.0f, 1.0f, 1.0f);
         }
         records.position(0).limit(specs.length * CubeInstancedAttribs.STRIDE);
 

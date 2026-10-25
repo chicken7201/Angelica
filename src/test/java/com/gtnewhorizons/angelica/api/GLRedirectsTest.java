@@ -105,6 +105,7 @@ class GLRedirectsTest {
         assertEquals(expected, GLRedirects.getTargetMethodName(className + "." + method));
     }
 
+    /** Verifies non redirected returns null. */
     @ParameterizedTest(name = "{0} -> null")
     @CsvSource({
         "GL11.GL_TEXTURE_2D",
@@ -113,14 +114,10 @@ class GLRedirectsTest {
         "Foo.bar",
         "String.valueOf",
         "ARBShaderObjects.GL_OBJECT_COMPILE_STATUS_ARB",
+        "noDotHere",
     })
     void nonRedirectedReturnsNull(String classAndMethod) {
         assertNull(GLRedirects.getTargetMethodName(classAndMethod));
-    }
-
-    @Test
-    void nullDotReturnsNull() {
-        assertNull(GLRedirects.getTargetMethodName("noDotHere"));
     }
 
     @ParameterizedTest(name = "pattern matches {0}")

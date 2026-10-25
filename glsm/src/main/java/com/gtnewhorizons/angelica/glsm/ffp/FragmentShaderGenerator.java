@@ -298,6 +298,7 @@ public final class FragmentShaderGenerator {
         }
     }
 
+    /** Emits the fixed-function alpha-test shader code. */
     private static void emitAlphaTest(StringBuilder sb, FragmentKey key) {
         if (!key.alphaTestEnabled()) return;
 
@@ -305,7 +306,7 @@ public final class FragmentShaderGenerator {
         final int func = FragmentKey.decodeAlphaFunc(key.alphaTestFunc());
 
 
-        sb.append("  float qa = round(color.a * 255.0);\n");
+        sb.append("  float qa = ").append(FfpGlsl.quantizeAlpha("color.a")).append(";\n");
         switch (func) {
             case GL11.GL_NEVER ->
                 sb.append("  discard;\n");
@@ -329,24 +330,14 @@ public final class FragmentShaderGenerator {
         }
     }
 
+    /** Emits the fixed-function fog shader code. */
     private static void emitFog(StringBuilder sb, FragmentKey key) {
         final int fogMode = key.fogMode();
         if (fogMode == FragmentKey.FOG_NONE) return;
 
         sb.append("  // Fog\n");
         sb.append("  float f;\n");
-
-        switch (fogMode) {
-            case FragmentKey.FOG_LINEAR ->
-                sb.append("  f = v_FogCoord * u_FogParams.x + u_FogParams.y;\n");
-            case FragmentKey.FOG_EXP ->
-                sb.append("  f = exp2(-(v_FogCoord * u_FogParams.z));\n");
-            case FragmentKey.FOG_EXP2 -> {
-                sb.append("  float fogTmp = v_FogCoord * u_FogParams.w;\n");
-                sb.append("  f = exp2(-(fogTmp * fogTmp));\n");
-            }
-        }
-
+        FfpGlsl.appendFogFactor(sb, "  ", fogMode, "v_FogCoord", "u_FogParams");
         sb.append("  f = clamp(f, 0.0, 1.0);\n");
         sb.append("  color.rgb = mix(u_FogColor.rgb, color.rgb, f);\n");
     }

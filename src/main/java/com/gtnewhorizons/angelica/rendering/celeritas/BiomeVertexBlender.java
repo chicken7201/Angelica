@@ -77,10 +77,21 @@ public final class BiomeVertexBlender {
         return blender != null && blender.isActive();
     }
 
-    /** Replaces uniform block tint with white before sampling individual corners. */
-    public int deferBlockTint() {
+    /** Arms this biome blender for the next matching block color lookup. */
+    public void arm() {
+        cache.armedBlender = this;
+    }
+
+    /** Removes this biome blender from deferred color lookup. */
+    public void disarm() {
+        cache.armedBlender = null;
+    }
+
+    /** Defers only a color lookup matching the active block and tint type. */
+    private boolean tryDefer(SmoothBiomeColorCache.ColorType type, int x, int y, int z) {
+        if (this.type != type || blockX != x || blockY != y || blockZ != z) return false;
         replacedBlockTint = true;
-        return 0xFFFFFF;
+        return true;
     }
 
     /** Applies biome tint while preserving the original face color and lighting. */
@@ -139,7 +150,11 @@ public final class BiomeVertexBlender {
     /** Samples cached biome color for the supplied block access. */
     public static long smoothColor(IBlockAccess access, SmoothBiomeColorCache.ColorType type, int x, int y, int z) {
         final SmoothBiomeColorCache cache = SmoothBiomeColorCache.getActiveCache();
-        if (cache != null) return cache.getColor(type, x, y, z) & 0xFFFFFFFFL;
+        if (cache != null) {
+            final BiomeVertexBlender armed = cache.armedBlender;
+            if (armed != null && armed.tryDefer(type, x, y, z)) return 0xFFFFFFL;
+            return cache.getColor(type, x, y, z) & 0xFFFFFFFFL;
+        }
         if (access instanceof WorldClientExtension ext) return ext.celeritas$getSmoothBiomeColorCache().getColor(type, x, y, z) & 0xFFFFFFFFL;
         return -1L;
     }

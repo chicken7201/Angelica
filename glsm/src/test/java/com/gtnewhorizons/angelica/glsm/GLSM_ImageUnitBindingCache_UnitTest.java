@@ -21,7 +21,6 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 @GLCoreTest
 public class GLSM_ImageUnitBindingCache_UnitTest {
 
-    /** Clears one image unit without changing other tracked bindings. */
     private static void unbind(int unit) {
         GLStateManager.glBindImageTexture(unit, 0, 0, false, 0, GL15.GL_READ_ONLY, GL30.GL_R8);
     }
@@ -46,7 +45,7 @@ public class GLSM_ImageUnitBindingCache_UnitTest {
         }
     }
 
-    /** Checks every field of a valid non-layered image binding. */
+    /** Verifies bind then query returns full tuple. */
     @Test
     void bindThenQueryReturnsFullTuple() {
         final int tex = imageTexture(GL30.GL_RGBA32UI);
@@ -65,7 +64,7 @@ public class GLSM_ImageUnitBindingCache_UnitTest {
         }
     }
 
-    /** Restores a saved image tuple after another texture replaces it. */
+    /** Verifies save restore round trips the whole tuple. */
     @Test
     void saveRestoreRoundTripsTheWholeTuple() {
         final int a = imageTexture(GL30.GL_R32UI);
@@ -92,7 +91,7 @@ public class GLSM_ImageUnitBindingCache_UnitTest {
         }
     }
 
-    /** Verifies clearing an image unit resets its texture and mip level. */
+    /** Verifies reset to zero is not a restore. */
     @Test
     void resetToZeroIsNotARestore() {
         final int tex = imageTexture(GL30.GL_R32UI);
@@ -108,22 +107,33 @@ public class GLSM_ImageUnitBindingCache_UnitTest {
         }
     }
 
-    /** Verifies deleting a live texture clears its tracked image binding. */
+    /** Verifies deleting the bound texture clears the image unit. */
     @Test
     void deletingTheBoundTextureClearsTheImageUnit() {
-        final int tex = imageTexture(GL30.GL_R32UI);
+        final boolean driverHasImages = GLStateManager.capabilities != null && GLStateManager.capabilities.OpenGL42;
+        final int tex = GL11.glGenTextures();
+        GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, tex);
+        GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, 0);
         try {
             GLStateManager.glBindImageTexture(1, tex, 0, true, 0, GL15.GL_READ_WRITE, GL30.GL_R32UI);
             assertEquals(tex, GLStateManager.glGetInteger(GL42.GL_IMAGE_BINDING_NAME, 1));
+            if (driverHasImages) assertEquals(tex, GL30.glGetInteger(GL42.GL_IMAGE_BINDING_NAME, 1));
 
             GLStateManager.glDeleteTextures(tex);
             assertEquals(0, GLStateManager.glGetInteger(GL42.GL_IMAGE_BINDING_NAME, 1), "GL unbinds a deleted texture from every image unit");
+            if (driverHasImages) assertEquals(0, GL30.glGetInteger(GL42.GL_IMAGE_BINDING_NAME, 1), "driver unbinds a deleted texture from every image unit");
+            assertEquals(GL15.GL_READ_ONLY, GLStateManager.glGetInteger(GL42.GL_IMAGE_BINDING_ACCESS, 1));
+            assertEquals(GL30.GL_R8, GLStateManager.glGetInteger(GL42.GL_IMAGE_BINDING_FORMAT, 1));
+            if (driverHasImages) {
+                assertEquals(GL30.glGetInteger(GL42.GL_IMAGE_BINDING_ACCESS, 1), GLStateManager.glGetInteger(GL42.GL_IMAGE_BINDING_ACCESS, 1));
+                assertEquals(GL30.glGetInteger(GL42.GL_IMAGE_BINDING_FORMAT, 1), GLStateManager.glGetInteger(GL42.GL_IMAGE_BINDING_FORMAT, 1));
+            }
         } finally {
             unbind(1);
         }
     }
 
-    /** Keeps independent image units and layered flags intact. */
+    /** Verifies units are independent and unit zero is not special. */
     @Test
     void unitsAreIndependentAndUnitZeroIsNotSpecial() {
         final int a = imageTexture(GL30.GL_R32UI);
@@ -144,7 +154,7 @@ public class GLSM_ImageUnitBindingCache_UnitTest {
         }
     }
 
-    /** Verifies an invalid unit is rejected without corrupting a valid binding. */
+    /** Verifies out of range unit does not corrupt neighbours. */
     @Test
     void outOfRangeUnitDoesNotCorruptNeighbours() {
         final int tex = imageTexture(GL30.GL_R32UI);
@@ -165,7 +175,7 @@ public class GLSM_ImageUnitBindingCache_UnitTest {
         }
     }
 
-    /** Compares tracked image queries with the driver's live tuple. */
+    /** Verifies driver agrees when available. */
     @Test
     void driverAgreesWhenAvailable() {
         assumeTrue(GLStateManager.capabilities != null && GLStateManager.capabilities.OpenGL42, "no GL 4.2 image load/store on this context");
@@ -182,9 +192,30 @@ public class GLSM_ImageUnitBindingCache_UnitTest {
             assertEquals(GL30.glGetInteger(GL42.GL_IMAGE_BINDING_NAME, 1), GLStateManager.glGetInteger(GL42.GL_IMAGE_BINDING_NAME, 1));
             assertEquals(GL30.glGetInteger(GL42.GL_IMAGE_BINDING_ACCESS, 1), GLStateManager.glGetInteger(GL42.GL_IMAGE_BINDING_ACCESS, 1));
             assertEquals(GL30.glGetInteger(GL42.GL_IMAGE_BINDING_FORMAT, 1), GLStateManager.glGetInteger(GL42.GL_IMAGE_BINDING_FORMAT, 1));
+
+            assertEquals(GL30.glGetInteger(GL42.GL_IMAGE_BINDING_NAME, 3), GLStateManager.glGetInteger(GL42.GL_IMAGE_BINDING_NAME, 3));
+            assertEquals(GL30.glGetInteger(GL42.GL_IMAGE_BINDING_ACCESS, 3), GLStateManager.glGetInteger(GL42.GL_IMAGE_BINDING_ACCESS, 3));
+            assertEquals(GL30.glGetInteger(GL42.GL_IMAGE_BINDING_FORMAT, 3), GLStateManager.glGetInteger(GL42.GL_IMAGE_BINDING_FORMAT, 3));
         } finally {
             unbind(1);
             GLStateManager.glDeleteTextures(tex);
+        }
+    }
+
+    /** Verifies binding texture zero clears layered and layer. */
+    @Test
+    void bindingTextureZeroClearsLayeredAndLayer() {
+        try {
+            GLStateManager.glBindImageTexture(2, 0, 0, true, 3, GL15.GL_READ_WRITE, GL11.GL_RGBA8);
+
+            assertEquals(GL11.GL_FALSE, GLStateManager.glGetInteger(GL42.GL_IMAGE_BINDING_LAYERED, 2));
+            assertEquals(0, GLStateManager.glGetInteger(GL42.GL_IMAGE_BINDING_LAYER, 2));
+            if (GLStateManager.capabilities != null && GLStateManager.capabilities.OpenGL42) {
+                assertEquals(GL30.glGetInteger(GL42.GL_IMAGE_BINDING_LAYERED, 2), GLStateManager.glGetInteger(GL42.GL_IMAGE_BINDING_LAYERED, 2));
+                assertEquals(GL30.glGetInteger(GL42.GL_IMAGE_BINDING_LAYER, 2), GLStateManager.glGetInteger(GL42.GL_IMAGE_BINDING_LAYER, 2));
+            }
+        } finally {
+            unbind(2);
         }
     }
 }

@@ -79,6 +79,7 @@ public class GLSM_TextureInfoCache_UnitTest {
         }
     }
 
+    /** Verifies test repeated query after resolve uses cache. */
     @Test
     void testRepeatedQueryAfterResolveUsesCache() {
         int texId = GL11.glGenTextures();
@@ -92,6 +93,7 @@ public class GLSM_TextureInfoCache_UnitTest {
             int first = GLStateManager.glGetTexLevelParameteri(GL11.GL_TEXTURE_2D, 0, GL11.GL_TEXTURE_INTERNAL_FORMAT);
             assertFalse(info.needsInternalFormatResolve());
             int second = GLStateManager.glGetTexLevelParameteri(GL11.GL_TEXTURE_2D, 0, GL11.GL_TEXTURE_INTERNAL_FORMAT);
+            assertEquals(GL11.glGetTexLevelParameteri(GL11.GL_TEXTURE_2D, 0, GL11.GL_TEXTURE_INTERNAL_FORMAT), second);
             assertEquals(first, second);
         } finally {
             GL11.glDeleteTextures(texId);

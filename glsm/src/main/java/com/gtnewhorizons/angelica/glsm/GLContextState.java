@@ -3,6 +3,7 @@ package com.gtnewhorizons.angelica.glsm;
 import com.gtnewhorizon.gtnhlib.client.renderer.stacks.IStateStack;
 import it.unimi.dsi.fastutil.ints.Int2IntMap;
 import it.unimi.dsi.fastutil.ints.Int2IntOpenHashMap;
+import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import com.gtnewhorizons.angelica.glsm.stacks.AlphaStateStack;
 import com.gtnewhorizons.angelica.glsm.stacks.BlendStateStack;
 import com.gtnewhorizons.angelica.glsm.stacks.BooleanStateStack;
@@ -58,6 +59,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class GLContextState {
+    final ExitStateCapture exitCapture = new ExitStateCapture(this);
     private final List<IStateStack<?>> allStacksBuilder = new ArrayList<>();
     public IStateStack<?>[] allStacks;
     final List<BooleanStateStack> allBooleanStates = new ArrayList<>();
@@ -257,6 +259,7 @@ public class GLContextState {
     public boolean vanillaBlendEnabledBefore;
     public int drawFramebuffer = 0;
     public int readFramebuffer = 0;
+    public final Int2ObjectOpenHashMap<int[]> framebufferTextures = new Int2ObjectOpenHashMap<>();
     public int texGenGeneration;
     public int defaultVAO;
     public final VAOManager vaos = new VAOManager();

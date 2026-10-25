@@ -126,9 +126,10 @@ public class DSAARB extends DSAUnsupported {
         RENDER_BACKEND.blitNamedFramebuffer(source, dest, offsetX, offsetY, width, height, offsetX2, offsetY2, width2, height2, bufferChoice, filter);
     }
 
+    /** Updates framebuffer texture2 d state for DSAARB. */
     @Override
     public void framebufferTexture2D(int fb, int fbtarget, int attachment, int target, int texture, int levels) {
-        RENDER_BACKEND.namedFramebufferTexture(fb, attachment, texture, levels);
+        GLStateManager.glNamedFramebufferTexture(fb, attachment, texture, levels);
     }
 
     @Override
@@ -137,9 +138,9 @@ public class DSAARB extends DSAUnsupported {
         return RENDER_BACKEND.createFramebuffers();
     }
 
+    /** Creates texture for DSAARB. */
     @Override
     public int createTexture(int target) {
-        GLStateManager.requireContext("glCreateTextures");
-        return RENDER_BACKEND.createTextures(target);
+        return GLStateManager.glCreateTextures(target);
     }
 }

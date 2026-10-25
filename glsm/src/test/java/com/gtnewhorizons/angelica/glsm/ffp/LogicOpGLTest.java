@@ -14,11 +14,11 @@ class LogicOpGLTest {
 
     private static final int SIZE = 8;
 
+    /** Updates up for LogicOpGLTest. */
     @BeforeEach
     void setUp() {
         FfpFixture.resetFfpState();
-        ShaderManager.enable();
-        ShaderManager.getInstance().activate();
+        FfpFixture.activateFfp();
         GLStateManager.glViewport(0, 0, SIZE, SIZE);
         GLStateManager.glMatrixMode(GL11.GL_PROJECTION);
         GLStateManager.glLoadIdentity();

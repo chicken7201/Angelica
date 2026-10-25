@@ -80,10 +80,6 @@ public class Uniforms {
     private final Vector3f tempVec3 = new Vector3f();
     private final FloatBuffer clipPlaneBuf = memAllocFloat(32); // 8 planes * vec4
 
-    private static final double LN2 = java.lang.Math.log(2.0);
-    private static final double SQRT_LN2 = java.lang.Math.sqrt(LN2);
-
-    /** Updates changed uniform bytes and restores a lost binding without rewriting unchanged data. */
     public void upload(GLContextState glCtx) {
         boolean dirty = false;
         contentChanged = false;
@@ -226,6 +222,7 @@ public class Uniforms {
         bound = true;
     }
 
+    /** Stages changed matrices in the FFP uniform block. */
     private void stageMatrices(boolean mvChanged, boolean projChanged, GLContextState glCtx) {
         final Matrix4f mv = glCtx.modelViewMatrix;
         final Matrix4f proj = glCtx.projectionMatrix;
@@ -235,8 +232,12 @@ public class Uniforms {
         if (projChanged) {
             putMat4(FFPUniformBlock.PROJECTION_MATRIX, proj);
         }
-        proj.mul(mv, mvpMatrix);
-        putMat4(FFPUniformBlock.MVP_MATRIX, mvpMatrix);
+        putMat4(FFPUniformBlock.MVP_MATRIX, modelViewProjection(proj, mv, mvpMatrix));
+    }
+
+    /** Multiplies projection and model-view matrices into the supplied destination. */
+    public static Matrix4f modelViewProjection(Matrix4f proj, Matrix4f mv, Matrix4f dest) {
+        return proj.mul(mv, dest);
     }
 
     private void stageNormalMatrix(GLContextState glCtx) {
@@ -329,6 +330,7 @@ public class Uniforms {
         }
     }
 
+    /** Stages current fragment colors, fog parameters and alpha-test values. */
     private void stageFragment(GLContextState glCtx) {
         putFloat(FFPUniformBlock.ALPHA_REF, glCtx.alphaState.getReference());
 
@@ -345,17 +347,8 @@ public class Uniforms {
         final var secondary = glCtx.secondaryColor;
         putVec3(FFPUniformBlock.SECONDARY_COLOR, secondary.getRed(), secondary.getGreen(), secondary.getBlue());
 
-        // Mesa STATE_FOG_PARAMS_OPTIMIZED
         final FogState fog = glCtx.fogState;
-        final float start = fog.getStart();
-        final float end = fog.getEnd();
-        final float density = fog.getDensity();
-        final float range = end - start;
-        putVec4(FFPUniformBlock.FOG_PARAMS,
-            range != 0.0f ? -1.0f / range : 0.0f,
-            range != 0.0f ? end / range : 1.0f,
-            (float) (density / LN2),
-            (float) (density / SQRT_LN2));
+        putVec4(FFPUniformBlock.FOG_PARAMS, fog.linearScale(), fog.linearBias(), fog.expScale(), fog.exp2Scale());
         putVec4(FFPUniformBlock.FOG_COLOR,
             (float) fog.getFogColor().x, (float) fog.getFogColor().y, (float) fog.getFogColor().z,
             fog.getFogAlpha());
@@ -409,10 +402,13 @@ public class Uniforms {
         putVec4(offset, plane[0], plane[1], plane[2], plane[3]);
     }
 
+    /** Retires the frame uniform range and forces a fresh allocation for the next frame. */
     public void endFrame() {
         if (ring != null) {
             ring.endFrame();
         }
+        invalidateBinding();
+        boundOffset = -1;
         lastFrameBlockWrites = blockWrites;
         lastFrameBlockSkips = blockSkips;
         lastFrameStagedMatrices = stagedMatrices;

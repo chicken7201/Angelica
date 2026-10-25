@@ -27,18 +27,23 @@ class GLSM_DisplayList_RawTessellatorTransform_Test {
         GLStateManager.glLoadIdentity();
     }
 
-    @Test
-    void pendingTransformIsEmittedBeforeARawDraw() {
+    /** Compiles half scaled for GLSM_DisplayList_RawTessellatorTransform_Test. */
+    private CompiledDisplayList compileHalfScaled(Runnable body) {
         testList = GLStateManager.glGenLists(1);
         GLStateManager.glNewList(testList, GL11.GL_COMPILE);
-
         GLStateManager.glScalef(0.5f, 0.5f, 0.5f);
-        rawQuad(1.0f);
-
+        body.run();
         GLStateManager.glEndList();
 
         final CompiledDisplayList compiled = DisplayListManager.getDisplayList(testList);
         assertNotNull(compiled);
+        return compiled;
+    }
+
+    /** Verifies pending transform is emitted before a raw draw. */
+    @Test
+    void pendingTransformIsEmittedBeforeARawDraw() {
+        final CompiledDisplayList compiled = compileHalfScaled(() -> rawQuad(1.0f));
 
         final IntList opcodes = compiled.getCommandOpcodes();
         final int scaleIndex = opcodes.indexOf(GLCommand.SCALE);
@@ -50,18 +55,10 @@ class GLSM_DisplayList_RawTessellatorTransform_Test {
         assertEquals(1, compiled.getCommandCounts().getOrDefault(GLCommand.SCALE, 0), "Scale emitted once, not again by the end-of-list flush");
     }
 
+    /** Verifies pending transform is not emitted before a baked draw. */
     @Test
     void pendingTransformIsNotEmittedBeforeABakedDraw() {
-        testList = GLStateManager.glGenLists(1);
-        GLStateManager.glNewList(testList, GL11.GL_COMPILE);
-
-        GLStateManager.glScalef(0.5f, 0.5f, 0.5f);
-        immediateQuad(1.0f);
-
-        GLStateManager.glEndList();
-
-        final CompiledDisplayList compiled = DisplayListManager.getDisplayList(testList);
-        assertNotNull(compiled);
+        final CompiledDisplayList compiled = compileHalfScaled(() -> immediateQuad(1.0f));
 
         final IntList opcodes = compiled.getCommandOpcodes();
         final int scaleIndex = opcodes.indexOf(GLCommand.SCALE);
@@ -71,19 +68,13 @@ class GLSM_DisplayList_RawTessellatorTransform_Test {
         assertTrue(scaleIndex < 0 || drawIndex < scaleIndex, "Baked geometry must draw before the delta reaches the stream");
     }
 
+    /** Verifies a raw draw after a baked draw still gets the transform. */
     @Test
     void aRawDrawAfterABakedDrawStillGetsTheTransform() {
-        testList = GLStateManager.glGenLists(1);
-        GLStateManager.glNewList(testList, GL11.GL_COMPILE);
-
-        GLStateManager.glScalef(0.5f, 0.5f, 0.5f);
-        immediateQuad(1.0f);
-        rawQuad(1.0f);
-
-        GLStateManager.glEndList();
-
-        final CompiledDisplayList compiled = DisplayListManager.getDisplayList(testList);
-        assertNotNull(compiled);
+        final CompiledDisplayList compiled = compileHalfScaled(() -> {
+            immediateQuad(1.0f);
+            rawQuad(1.0f);
+        });
 
         final IntList opcodes = compiled.getCommandOpcodes();
         final int scaleIndex = opcodes.indexOf(GLCommand.SCALE);
@@ -95,25 +86,20 @@ class GLSM_DisplayList_RawTessellatorTransform_Test {
         assertTrue(scaleIndex < lastDrawIndex, "The raw draw still gets the transform");
     }
 
+    /** Verifies a raw draw does not flush while baked geometry is pending. */
     @Test
     void aRawDrawDoesNotFlushWhileBakedGeometryIsPending() {
-        testList = GLStateManager.glGenLists(1);
-        GLStateManager.glNewList(testList, GL11.GL_COMPILE);
+        final CompiledDisplayList compiled = compileHalfScaled(() -> {
+            GLStateManager.glBegin(GL11.GL_QUADS);
+            GLStateManager.glVertex3f(0.0f, 0.0f, 0.0f);
+            GLStateManager.glVertex3f(1.0f, 0.0f, 0.0f);
+            GLStateManager.glVertex3f(1.0f, 1.0f, 0.0f);
+            GLStateManager.glVertex3f(0.0f, 1.0f, 0.0f);
 
-        GLStateManager.glScalef(0.5f, 0.5f, 0.5f);
-        GLStateManager.glBegin(GL11.GL_QUADS);
-        GLStateManager.glVertex3f(0.0f, 0.0f, 0.0f);
-        GLStateManager.glVertex3f(1.0f, 0.0f, 0.0f);
-        GLStateManager.glVertex3f(1.0f, 1.0f, 0.0f);
-        GLStateManager.glVertex3f(0.0f, 1.0f, 0.0f);
+            rawQuad(1.0f);
 
-        rawQuad(1.0f);
-
-        GLStateManager.glEnd();
-        GLStateManager.glEndList();
-
-        final CompiledDisplayList compiled = DisplayListManager.getDisplayList(testList);
-        assertNotNull(compiled);
+            GLStateManager.glEnd();
+        });
 
         final IntList opcodes = compiled.getCommandOpcodes();
         final int scaleIndex = opcodes.indexOf(GLCommand.SCALE);

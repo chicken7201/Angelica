@@ -174,6 +174,7 @@ class DisplayListMatrixRestorationTest extends DisplayListTestFixture {
         }
     }
 
+    /** Verifies texture attributes flush transforms before restoring unit. */
     @ParameterizedTest
     @ValueSource(ints = { GL11.GL_TEXTURE_BIT, GL11.GL_TEXTURE_BIT | GL11.GL_TRANSFORM_BIT, GL11.GL_ALL_ATTRIB_BITS })
     void textureAttributesFlushTransformsBeforeRestoringUnit(int mask) {
@@ -197,6 +198,7 @@ class DisplayListMatrixRestorationTest extends DisplayListTestFixture {
             GLStateManager.glCallList(list);
             String context = "compileMode=" + compileMode;
             assertEquals(GL13.GL_TEXTURE0, GLStateManager.glGetInteger(GL13.GL_ACTIVE_TEXTURE), context);
+            assertEquals(GL13.GL_TEXTURE0, GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE), context);
             assertEquals(3f, translation(GL11.GL_MODELVIEW_MATRIX), context);
             assertEquals(0f, translation(GL11.GL_TEXTURE_MATRIX), context);
             GLStateManager.glActiveTexture(GL13.GL_TEXTURE1);

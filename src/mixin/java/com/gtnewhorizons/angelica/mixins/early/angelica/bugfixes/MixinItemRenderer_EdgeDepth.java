@@ -6,7 +6,7 @@ import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.ffp.CombinedGlint;
 import com.gtnewhorizons.angelica.glsm.hooks.BatchStateGuard;
 import com.gtnewhorizons.angelica.glsm.profiling.Tracy;
-import com.gtnewhorizons.angelica.rendering.items.HeldItemGlint;
+import com.gtnewhorizons.angelica.rendering.items.ItemGlint;
 import net.coderbot.iris.pipeline.ShadowRenderer;
 import net.minecraft.client.renderer.ItemRenderer;
 import net.minecraft.client.renderer.Tessellator;
@@ -53,6 +53,7 @@ public class MixinItemRenderer_EdgeDepth {
         angelica$firstLayerMarked = false;
     }
 
+    /** Updates prepare glint stencil state for MixinItemRenderer_EdgeDepth. */
     @Surround(method = RENDER_ITEM,
         at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/ItemRenderer;renderItemIn2D(Lnet/minecraft/client/renderer/Tessellator;FFFFIIF)V", ordinal = 0, remap = true),
         id = "stencil", remap = false)
@@ -62,7 +63,7 @@ public class MixinItemRenderer_EdgeDepth {
         final boolean preparing = !ShadowRenderer.ACTIVE && !GLStateManager.isRecordingDisplayList()
             && !TessellatorManager.isCurrentlyCapturing() && !TessellatorManager.shouldInterceptDraw(tess)
             && GLStateManager.getDepthTest().isEnabled() && GLStateManager.getDepthState().isEnabled()
-            && HeldItemGlint.canResetStencil() && HeldItemGlint.eligible() && HeldItemGlint.needsImmediateBase(stack, pass);
+            && ItemGlint.canResetStencil() && ItemGlint.eligible() && ItemGlint.needsImmediateBase(stack, pass);
         if (preparing) {
             BatchStateGuard.suspend();
             try {
@@ -103,6 +104,7 @@ public class MixinItemRenderer_EdgeDepth {
         final boolean drawn = !angelica$drawingGlint && angelica$drawGlintGeometry(tess, minU, minV, maxU, maxV, width, height, thickness);
     }
 
+    /** Returns the draw glint geometry result for MixinItemRenderer_EdgeDepth. */
     @Unique
     private static boolean angelica$drawGlintGeometry(Tessellator tess, float minU, float minV, float maxU, float maxV,
                                                      int width, int height, float thickness) {
@@ -124,7 +126,7 @@ public class MixinItemRenderer_EdgeDepth {
         final boolean secondLayer = angelica$firstLayerMarked;
         BatchStateGuard.suspend();
         try {
-            final boolean combined = !secondLayer && HeldItemGlint.begin();
+            final boolean combined = !secondLayer && ItemGlint.begin();
             // Depth selects the surface, stencil limits it to one blend.
             // The base draw's stencil reset or the first layer's marks avoid a masked full-screen clear.
             GLStateManager.glPushAttrib(GL11.GL_STENCIL_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
@@ -150,7 +152,7 @@ public class MixinItemRenderer_EdgeDepth {
                 if (combined) CombinedGlint.end();
             }
             angelica$combinedGlint = combined;
-            angelica$firstLayerMarked = !combined && !secondLayer && HeldItemGlint.layersCoverSamePixels();
+            angelica$firstLayerMarked = !combined && !secondLayer && ItemGlint.layersCoverSamePixels();
         } finally {
             BatchStateGuard.resume();
         }

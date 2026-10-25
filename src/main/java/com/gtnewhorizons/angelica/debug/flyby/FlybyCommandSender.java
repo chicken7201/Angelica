@@ -22,6 +22,11 @@ final class FlybyCommandSender implements ICommandSender {
         this.anchor = anchor;
     }
 
+    /** Returns the player result for FlybyCommandSender. */
+    EntityPlayerMP player() {
+        return this.player;
+    }
+
     @Override
     public String getCommandSenderName() {
         return NAME;

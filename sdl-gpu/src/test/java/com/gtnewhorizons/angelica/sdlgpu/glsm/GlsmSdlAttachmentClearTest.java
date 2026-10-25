@@ -2,6 +2,7 @@ package com.gtnewhorizons.angelica.sdlgpu.glsm;
 
 import com.gtnewhorizons.angelica.config.SystemProperties;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
+import com.gtnewhorizons.angelica.glsm.testutil.Reflect;
 import com.gtnewhorizons.angelica.sdlgpu.frame.FrameManager;
 import com.gtnewhorizons.angelica.sdlgpu.resource.ResourceManager;
 import org.junit.jupiter.api.Tag;
@@ -12,11 +13,9 @@ import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL30;
 
-import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
-import sun.misc.Unsafe;
 
 import static com.gtnewhorizons.angelica.sdlgpu.glsm.GlsmSdlHeadlessRig.BLACK;
 import static com.gtnewhorizons.angelica.sdlgpu.glsm.GlsmSdlHeadlessRig.RED;
@@ -34,17 +33,9 @@ class GlsmSdlAttachmentClearTest {
         return GlsmSdlHeadlessRig.frameManager().frame();
     }
 
-    // Reflect.setStaticFinal rejects primitive fields.
+    /** Updates disable in pass clear for GlsmSdlAttachmentClearTest. */
     private static void setDisableInPassClear(boolean value) {
-        try {
-            final Field theUnsafe = Unsafe.class.getDeclaredField("theUnsafe");
-            theUnsafe.setAccessible(true);
-            final Unsafe unsafe = (Unsafe) theUnsafe.get(null);
-            final Field field = SystemProperties.class.getDeclaredField("SDL_DISABLE_IN_PASS_CLEAR");
-            unsafe.putBoolean(unsafe.staticFieldBase(field), unsafe.staticFieldOffset(field), value);
-        } catch (ReflectiveOperationException e) {
-            throw new AssertionError(e);
-        }
+        Reflect.setStaticFinal(SystemProperties.class, "SDL_DISABLE_IN_PASS_CLEAR", boolean.class, value);
     }
 
     /** Clears colour to black and depth to 0.9, then draws a quad so a render pass is open. */
@@ -452,6 +443,28 @@ class GlsmSdlAttachmentClearTest {
         GLStateManager.glDeleteTextures(texA);
         GLStateManager.glDeleteTextures(texB);
 
+        GlsmSdlHeadlessRig.bindTarget();
+    }
+
+    /** Verifies clear reaches a renderbuffer respecified while attached. */
+    @Test
+    void clearReachesARenderbufferRespecifiedWhileAttached() {
+        final int rb = GLStateManager.glGenRenderbuffers();
+        GLStateManager.glBindRenderbuffer(GL30.GL_RENDERBUFFER, rb);
+        GLStateManager.glRenderbufferStorage(GL30.GL_RENDERBUFFER, GL11.GL_RGBA8, SIZE / 4, SIZE / 4);
+        final int fbo = GLStateManager.glGenFramebuffers();
+        GLStateManager.glBindFramebuffer(GL30.GL_FRAMEBUFFER, fbo);
+        GLStateManager.glFramebufferRenderbuffer(GL30.GL_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, GL30.GL_RENDERBUFFER, rb);
+
+        GLStateManager.glRenderbufferStorage(GL30.GL_RENDERBUFFER, GL11.GL_RGBA8, SIZE, SIZE);
+        GLStateManager.glViewport(0, 0, SIZE, SIZE);
+        GLStateManager.glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
+        GLStateManager.glClear(GL11.GL_COLOR_BUFFER_BIT);
+
+        GlsmSdlHeadlessRig.assertUniform(GlsmSdlHeadlessRig.readTarget(), RED, "respecified renderbuffer must stay attached");
+
+        GLStateManager.glDeleteFramebuffers(fbo);
+        GLStateManager.glDeleteRenderbuffers(rb);
         GlsmSdlHeadlessRig.bindTarget();
     }
 

@@ -16,6 +16,7 @@ import org.lwjgl.opengl.GL32;
 import org.lwjgl.opengl.PixelFormat;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.extension.ExtensionContext.Namespace.GLOBAL;
 
 /**
@@ -26,8 +27,10 @@ public class GLSMCoreExtension implements BeforeAllCallback, BeforeEachCallback,
     private static boolean started = false;
     private static Throwable startFailure;
 
+    /** Initializes the rendering fixture before the test lifecycle phase. */
     @Override
     public void beforeAll(ExtensionContext context) throws LWJGLException {
+        GlsmRedirectAgent.requireInstalled();
         if (startFailure != null) {
             throw new IllegalStateException("GLSMCoreExtension context setup failed earlier in this JVM", startFailure);
         }
@@ -77,11 +80,16 @@ public class GLSMCoreExtension implements BeforeAllCallback, BeforeEachCallback,
         }
     }
 
+    /** Checks and restores the rendering fixture after the test lifecycle phase. */
     @Override
     public void afterEach(ExtensionContext context) {
         final int error = GL11.glGetError();
         while (GL11.glGetError() != GL11.GL_NO_ERROR) {}
+        final boolean ffpDisabled = !ShaderManager.isEnabled();
+        if (ffpDisabled) ShaderManager.enable();
+        GlsmRedirectAgent.assertNoFailures();
         assertEquals(GL11.GL_NO_ERROR, error, () -> "GL Error: 0x" + Integer.toHexString(error));
+        if (ffpDisabled) fail("test left FFP disabled");
     }
 
     @Override

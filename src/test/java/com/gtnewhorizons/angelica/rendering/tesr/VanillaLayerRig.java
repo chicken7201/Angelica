@@ -48,6 +48,12 @@ public final class VanillaLayerRig {
             return AlphaTestStorage.isAlphaTestLocked();
         }
 
+        /** Reports whether override held applies to VanillaLayerRig. */
+        @Override
+        public boolean isOverrideHeld() {
+            return AlphaTestStorage.isOverrideHeld();
+        }
+
         @Override
         public boolean deferAlphaTestToggle(boolean enabled) {
             return AlphaTestStorage.deferAlphaTestToggle(enabled);

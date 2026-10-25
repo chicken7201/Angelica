@@ -1,9 +1,9 @@
 package com.gtnewhorizons.angelica.rendering;
 
-import com.gtnewhorizons.angelica.glsm.backend.RenderBackend;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.ArrayList;
@@ -28,15 +28,17 @@ class PacerCoreTest {
         final PacerCore core;
         final List<Long> presents = new ArrayList<>();
 
-        Rig(long refreshPeriodNanos, boolean tearFree, int capHz) {
-            this(refreshPeriodNanos, tearFree, tearFree, capHz);
+        /** Initializes the state and dependencies used by PacerCoreTest. */
+        Rig(long refreshPeriodNanos, boolean fifo, int capHz) {
+            this(refreshPeriodNanos, fifo, fifo, capHz);
         }
 
-        Rig(long refreshPeriodNanos, boolean tearFree, boolean vsyncOn, int capHz) {
+        /** Initializes the state and dependencies used by PacerCoreTest. */
+        Rig(long refreshPeriodNanos, boolean fifo, boolean vsyncOn, int capHz) {
             final PacerSleeper sleeper = new PacerSleeper(time.clock(), time.parker(), false);
             core = new PacerCore(time.clock(), sleeper);
             core.setRefreshPeriodNanos(refreshPeriodNanos);
-            core.setTearFree(tearFree);
+            core.setFifo(fifo);
             core.setVsyncOn(vsyncOn);
             core.setCap(capHz);
         }
@@ -70,12 +72,24 @@ class PacerCoreTest {
             time.now = core.beginFrame(time.now);
         }
 
-        void feedRun(int count, long firstEndNanos, long durationNanos, long strideNanos) {
+        /** Returns the feed run result for PacerCoreTest. */
+        long feedRun(int count, long firstEndNanos, long durationNanos, long strideNanos) {
             long end = firstEndNanos;
             for (int i = 0; i < count; i++) {
                 feed(end, durationNanos, end);
                 end += strideNanos;
             }
+            return end;
+        }
+
+        /** Returns the feed off grid result for PacerCoreTest. */
+        long feedOffGrid(long endNanos, int count) {
+            long end = endNanos;
+            for (int i = 0; i < count; i++) {
+                end += P60 / 2;
+                feed(end, 5 * MS, end);
+            }
+            return end;
         }
 
         void idleFrames(int count, long atNanos) {
@@ -86,31 +100,28 @@ class PacerCoreTest {
         }
     }
 
+    /** Returns the cadence periods result for PacerCoreTest. */
     static Stream<Arguments> cadencePeriods() {
         return Stream.of(
             Arguments.of("a cap at the refresh rate collapses onto the refresh period", 60, P5994, true, P5994),
             Arguments.of("a cap near the refresh rate collapses onto the refresh period", 58, P60, true, P60),
-            Arguments.of("no cap uses the refresh period when tear free", 0, P60, true, P60),
+            Arguments.of("no cap uses the refresh period under fifo", 0, P60, true, P60),
             Arguments.of("a cap above the refresh rate collapses onto the refresh period", 240, P60, true, P60),
             Arguments.of("a cap far from every multiple keeps its literal period", 45, P60, true, 1_000_000_000L / 45),
             Arguments.of("a cap far from every multiple keeps its literal period", 100, P144, true, 1_000_000_000L / 100),
-            Arguments.of("a tearing mode ignores the refresh period", 100, P60, false, 10 * MS),
-            Arguments.of("a tearing mode with no cap is unpaced", 0, P60, false, 0L),
+            Arguments.of("a cap near a vblank multiple snaps to that multiple", 30, P60, true, 2 * P60),
+            Arguments.of("a cap near a vblank multiple snaps to that multiple", 50, P144, true, 3 * P144),
+            Arguments.of("a non-fifo mode ignores the refresh period", 100, P60, false, 10 * MS),
+            Arguments.of("a non-fifo mode with no cap is unpaced", 0, P60, false, 0L),
             Arguments.of("a zero refresh period with no cap is unpaced", 0, 0L, true, 0L),
             Arguments.of("a zero refresh period keeps the literal cap", 100, 0L, true, 10 * MS));
     }
 
+    /** Verifies cadence period nanos. */
     @ParameterizedTest(name = "{0}: cadencePeriodNanos({1}, {2}, {3}) -> {4}")
     @MethodSource("cadencePeriods")
-    void cadencePeriodNanos(String name, int capHz, long refreshPeriodNanos, boolean tearFree, long expected) {
-        assertEquals(expected, PacerCore.cadencePeriodNanos(capHz, refreshPeriodNanos, tearFree));
-    }
-
-    @Test
-    void aCapNearAVblankMultipleSnapsToThatMultiple() {
-        assertEquals(2 * P60, PacerCore.cadencePeriodNanos(30, P60, true));
-        assertEquals(3 * P144, PacerCore.cadencePeriodNanos(50, P144, true));
-        assertEquals(48, RenderBackend.hzFromPeriod(3 * P144));
+    void cadencePeriodNanos(String name, int capHz, long refreshPeriodNanos, boolean fifo, long expected) {
+        assertEquals(expected, PacerCore.cadencePeriodNanos(capHz, refreshPeriodNanos, fifo));
     }
 
     @Test
@@ -133,14 +144,13 @@ class PacerCoreTest {
         assertTrue(rig.core.locked());
     }
 
+    /** Verifies one bad pair restarts the run of consistent pairs. */
     @Test
     void oneBadPairRestartsTheRunOfConsistentPairs() {
         final Rig rig = new Rig(P60, true, 0);
-        rig.feedRun(PacerCore.LOCK_PAIRS, 20 * MS, 5 * MS, P60);
-        long end = 20 * MS + PacerCore.LOCK_PAIRS * P60;
+        long end = rig.feedRun(PacerCore.LOCK_PAIRS, 20 * MS, 5 * MS, P60);
 
-        end += P60 / 2;
-        rig.feed(end, 5 * MS, end);
+        end = rig.feedOffGrid(end, 1);
         assertFalse(rig.core.locked());
 
         for (int i = 0; i < PacerCore.LOCK_PAIRS; i++) {
@@ -150,63 +160,36 @@ class PacerCoreTest {
         assertTrue(rig.core.locked(), "a fresh run of consistent pairs must still lock");
     }
 
+    /** Verifies a run of inconsistent pairs gives up on the gate entirely. */
     @Test
     void aRunOfInconsistentPairsGivesUpOnTheGateEntirely() {
         final Rig rig = new Rig(P60, true, 0);
-        rig.feedRun(PacerCore.LOCK_PAIRS + 1, 20 * MS, 5 * MS, P60);
+        final long end = rig.feedRun(PacerCore.LOCK_PAIRS + 1, 20 * MS, 5 * MS, P60);
         assertTrue(rig.core.locked());
 
-        long end = 20 * MS + (PacerCore.LOCK_PAIRS + 1) * P60;
-        for (int i = 0; i < PacerCore.LOCK_WINDOW + 1; i++) {
-            end += P60 / 2;
-            rig.feed(end, 5 * MS, end);
-        }
+        rig.feedOffGrid(end, PacerCore.LOCK_WINDOW + 1);
         assertFalse(rig.core.locked(), "a gate that stops landing on the grid must be released");
         assertFalse(rig.core.probing(), "a gate proven off the grid must not be probed again");
     }
 
-    @Test
-    void anAbandonedGateStaysRetiredThroughAnotherOnGridRun() {
+    /** Verifies abandoned gate. */
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+        "an abandoned gate stays retired through another on-grid run, false, false",
+        "invalidate clears an abandoned gate, true, true"})
+    void abandonedGate(String label, boolean invalidate, boolean lockedAfter) {
         final Rig rig = new Rig(P60, true, 120);
-        rig.feedRun(PacerCore.LOCK_PAIRS + 1, 20 * MS, 5 * MS, P60);
+        long end = rig.feedRun(PacerCore.LOCK_PAIRS + 1, 20 * MS, 5 * MS, P60);
         assertTrue(rig.core.locked());
         assertEquals(60, rig.core.effectiveCapHz());
 
-        long end = 20 * MS + (PacerCore.LOCK_PAIRS + 1) * P60;
-        for (int i = 0; i < PacerCore.LOCK_WINDOW + 1; i++) {
-            end += P60 / 2;
-            rig.feed(end, 5 * MS, end);
-        }
+        end = rig.feedOffGrid(end, PacerCore.LOCK_WINDOW + 1);
         assertFalse(rig.core.locked());
         assertFalse(rig.core.probing());
 
-        for (int i = 0; i < PacerCore.LOCK_PAIRS + 1; i++) {
-            end += P60;
-            rig.feed(end, 5 * MS, end);
-        }
-        assertFalse(rig.core.locked(), "a retired inconsistent gate must not lock again");
-        assertFalse(rig.core.probing());
-    }
-
-    @Test
-    void invalidateClearsAnAbandonedGate() {
-        final Rig rig = new Rig(P60, true, 120);
-        rig.feedRun(PacerCore.LOCK_PAIRS + 1, 20 * MS, 5 * MS, P60);
-
-        long end = 20 * MS + (PacerCore.LOCK_PAIRS + 1) * P60;
-        for (int i = 0; i < PacerCore.LOCK_WINDOW + 1; i++) {
-            end += P60 / 2;
-            rig.feed(end, 5 * MS, end);
-        }
-        assertFalse(rig.core.locked());
-        assertFalse(rig.core.probing());
-
-        rig.core.invalidate();
-        for (int i = 0; i < PacerCore.LOCK_PAIRS + 1; i++) {
-            end += P60;
-            rig.feed(end, 5 * MS, end);
-        }
-        assertTrue(rig.core.locked());
+        if (invalidate) rig.core.invalidate();
+        rig.feedRun(PacerCore.LOCK_PAIRS + 1, end + P60, 5 * MS, P60);
+        assertEquals(lockedAfter, rig.core.locked(), label);
         assertFalse(rig.core.probing());
     }
 
@@ -345,11 +328,13 @@ class PacerCoreTest {
         assertEquals(parksBefore, rig.time.parks, "but it must never sleep");
     }
 
+    /** Verifies the first paced frame after an unpaced stretch is anchored without sleeping. */
     @Test
     void theFirstPacedFrameAfterAnUnpacedStretchIsAnchoredWithoutSleeping() {
         final Rig rig = new Rig(P60, false, 0);
-        for (int i = 0; i < 5; i++) rig.frame(4 * MS);
+        for (int i = 0; i < 50; i++) rig.frame(4 * MS);
         assertEquals(0, rig.time.parks);
+        assertEquals(0L, rig.core.slackNanos());
 
         rig.core.setCap(60);
         rig.frame(4 * MS);
@@ -385,14 +370,6 @@ class PacerCoreTest {
     }
 
     @Test
-    void anUnpacedFrameNeverSleeps() {
-        final Rig rig = new Rig(P60, false, 0);
-        for (int i = 0; i < 50; i++) rig.frame(4 * MS);
-        assertEquals(0, rig.time.parks);
-        assertEquals(0L, rig.core.slackNanos());
-    }
-
-    @Test
     void theMarginIsClampedIntoItsBandByTheCadence() {
         assertEquals(PacerCore.MARGIN_MIN_NANOS, PacerCore.clampMargin(0L, 16_666_666L));
         assertEquals(PacerCore.MARGIN_CEILING_NANOS, PacerCore.clampMargin(50 * MS, 100 * MS));
@@ -422,16 +399,26 @@ class PacerCoreTest {
         assertFalse(rig.core.probing());
     }
 
+    /** Verifies mailbox is never probed never locks and is uncapped. */
     @Test
-    void mailboxIsNeverProbedAndNeverLocks() {
-        final Rig rig = new Rig(P60, true, false, 0);
+    void mailboxIsNeverProbedNeverLocksAndIsUncapped() {
+        final Rig rig = new Rig(P60, false, false, 0);
         for (int i = 0; i < 40; i++) {
             final long end = 20 * MS + i * P60;
             rig.feed(end, 5 * MS, end);
             assertFalse(rig.core.probing());
         }
         assertFalse(rig.core.locked());
-        assertEquals(P60, cadenceNanos(rig.core));
+        assertFalse(rig.core.paced(), "mailbox must render past the refresh rate");
+        assertEquals(0L, cadenceNanos(rig.core));
+    }
+
+    /** Verifies a mailbox cap is literal rather than snapped to the refresh rate. */
+    @Test
+    void aMailboxCapIsLiteralRatherThanSnappedToTheRefreshRate() {
+        final Rig rig = new Rig(P60, false, false, 240);
+        rig.frame(MS);
+        assertEquals(1_000_000_000L / 240, cadenceNanos(rig.core));
     }
 
     @Test

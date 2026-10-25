@@ -68,8 +68,15 @@ public class IrisGLSMBridge {
     public static void installImmediateExtendedHandler() {
         GLSMHooks.immediateExtendedHandler = new ImmediateExtendedAttribs();
         final CapturedRenderingState state = CapturedRenderingState.INSTANCE;
-        state.setEntityIdsListener(() -> GLStateManager.setEntityIds(
-            state.getCurrentRenderedEntity(), state.getCurrentRenderedBlockEntity(), state.getCurrentRenderedItem()));
+        state.setEntityIdsListener(() -> {
+            final boolean suspended = GLStateManager.suspendExitCapture();
+            try {
+                GLStateManager.setEntityIds(
+                    state.getCurrentRenderedEntity(), state.getCurrentRenderedBlockEntity(), state.getCurrentRenderedItem());
+            } finally {
+                GLStateManager.resumeExitCapture(suspended);
+            }
+        });
     }
 
     public static void installPostTransformHook() {
@@ -105,6 +112,7 @@ public class IrisGLSMBridge {
         context.colorMask.setVanillaLayer(DepthColorStorage.COLOR_LAYER);
     }
 
+    /** Registers IrisGLSMBridge state for IrisGLSMBridge. */
     public static void register() {
         GLSMConfig.expandVertexFormats = Iris.enabled;
         IrisSamplers.initRenderer();
@@ -160,6 +168,12 @@ public class IrisGLSMBridge {
             @Override
             public boolean isAlphaTestLocked() {
                 return Iris.enabled && AlphaTestStorage.isAlphaTestLocked();
+            }
+
+            /** Reports whether override held applies to IrisGLSMBridge. */
+            @Override
+            public boolean isOverrideHeld() {
+                return Iris.enabled && AlphaTestStorage.isOverrideHeld();
             }
 
             @Override

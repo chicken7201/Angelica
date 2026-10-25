@@ -615,6 +615,24 @@ public final class Lwjgl2GLRenderBackend extends RenderBackend {
         GL30.glFramebufferTexture2D(target, attachment, textarget, texture, level);
     }
 
+    /** Updates framebuffer texture1 d state for Lwjgl2GLRenderBackend. */
+    @Override
+    public void framebufferTexture1D(int target, int attachment, int textarget, int texture, int level) {
+        GL30.glFramebufferTexture1D(target, attachment, textarget, texture, level);
+    }
+
+    /** Updates framebuffer texture3 d state for Lwjgl2GLRenderBackend. */
+    @Override
+    public void framebufferTexture3D(int target, int attachment, int textarget, int texture, int level, int zoffset) {
+        GL30.glFramebufferTexture3D(target, attachment, textarget, texture, level, zoffset);
+    }
+
+    /** Updates framebuffer texture layer state for Lwjgl2GLRenderBackend. */
+    @Override
+    public void framebufferTextureLayer(int target, int attachment, int texture, int level, int layer) {
+        GL30.glFramebufferTextureLayer(target, attachment, texture, level, layer);
+    }
+
     @Override
     public void framebufferTexture(int target, int attachment, int texture, int level) {
         GL32.glFramebufferTexture(target, attachment, texture, level);

@@ -6,6 +6,8 @@ import com.gtnewhorizons.angelica.glsm.testutil.Reflect;
 import com.gtnewhorizons.angelica.sdlgpu.shader.ShaderManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.util.spvc.Spvc;
@@ -56,6 +58,12 @@ class PipelineCacheVertexInputTest {
             if (vecSizes[i] != 0) out[i] = Spvc.SPVC_BASETYPE_FP32;
         }
         return out;
+    }
+
+    /** Returns the fp32 cache result for PipelineCacheVertexInputTest. */
+    private static PipelineCache fp32Cache(int shaderInputMask, int... vecSizesByLocation) {
+        final int[] vecSizes = vecSizes(vecSizesByLocation);
+        return cache(shaderInputMask, vecSizes, fp32(vecSizes));
     }
 
     private static PipelineCache cache(int shaderInputMask, int[] vecSizes, int[] baseTypes) {
@@ -109,10 +117,9 @@ class PipelineCacheVertexInputTest {
         vao.bindingStride[loc] = stride;
     }
 
+    /** Returns the coercion cache result for PipelineCacheVertexInputTest. */
     private static PipelineCache coercionCache(String name) {
-        final int[] vecSizes = vecSizes(4);
-        final int[] baseTypes = fp32(vecSizes);
-        final PipelineCache c = cache(1, vecSizes, baseTypes);
+        final PipelineCache c = fp32Cache(1, 4);
         final String[] names = new String[ContextState.MAX_VERTEX_ATTRIBS];
         names[0] = name;
         c.shaderInputName = names;
@@ -190,11 +197,10 @@ class PipelineCacheVertexInputTest {
         assertTrue(store.loggedFormatSubstitution.isEmpty());
     }
 
+    /** Verifies sparse layout locations0and2 builds dense binding array. */
     @Test
     void sparseLayout_locations0and2_buildsDenseBindingArray() {
-        final int[] vecSizes = vecSizes(3, 0, 2);
-        final int[] baseTypes = fp32(vecSizes);
-        final PipelineCache c = cache(0x5, vecSizes, baseTypes);
+        final PipelineCache c = fp32Cache(0x5, 3, 0, 2);
 
         final ContextState cs = new ContextState();
         enableFloatAttrib(cs, 0, 3, 20);
@@ -244,11 +250,10 @@ class PipelineCacheVertexInputTest {
         }
     }
 
+    /** Verifies corrected dh generic layout builds successfully. */
     @Test
     void correctedDhGenericLayout_buildsSuccessfully() {
-        final int[] vecSizes = vecSizes(3, 4);
-        final int[] baseTypes = fp32(vecSizes);
-        final PipelineCache c = cache(0x3, vecSizes, baseTypes);
+        final PipelineCache c = fp32Cache(0x3, 3, 4);
 
         final ContextState cs = new ContextState();
         enableFloatAttrib(cs, 0, 3, 12);
@@ -259,11 +264,10 @@ class PipelineCacheVertexInputTest {
         }
     }
 
+    /** Verifies dense layout locations0 1 2 no placeholders. */
     @Test
     void denseLayout_locations0_1_2_noPlaceholders() {
-        final int[] vecSizes = vecSizes(3, 4, 2);
-        final int[] baseTypes = fp32(vecSizes);
-        final PipelineCache c = cache(0x7, vecSizes, baseTypes);
+        final PipelineCache c = fp32Cache(0x7, 3, 4, 2);
 
         final ContextState cs = new ContextState();
         enableFloatAttrib(cs, 0, 3, 24);
@@ -281,11 +285,10 @@ class PipelineCacheVertexInputTest {
         }
     }
 
+    /** Verifies shader expects but vao missing emits constant binding. */
     @Test
     void shaderExpectsButVaoMissing_emitsConstantBinding() {
-        final int[] vecSizes = vecSizes(3, 4);
-        final int[] baseTypes = fp32(vecSizes);
-        final PipelineCache c = cache(0x3, vecSizes, baseTypes);
+        final PipelineCache c = fp32Cache(0x3, 3, 4);
 
         final ContextState cs = new ContextState();
         enableFloatAttrib(cs, 0, 3, 12);
@@ -303,11 +306,10 @@ class PipelineCacheVertexInputTest {
         }
     }
 
+    /** Verifies constant binding uses zero pitch except on metal. */
     @Test
     void constantBindingUsesZeroPitchExceptOnMetal() {
-        final int[] vecSizes = vecSizes(0, 0, 0, 0, 3);
-        final int[] baseTypes = fp32(vecSizes);
-        final PipelineCache c = cache(1 << 4, vecSizes, baseTypes);
+        final PipelineCache c = fp32Cache(1 << 4, 0, 0, 0, 0, 3);
         final ContextState cs = new ContextState();
 
         for (String driver : new String[] { "vulkan", "metal", "direct3d12" }) {
@@ -321,11 +323,10 @@ class PipelineCacheVertexInputTest {
         }
     }
 
+    /** Verifies vao extra attrib not in shader dropped from pipeline. */
     @Test
     void vaoExtraAttribNotInShader_droppedFromPipeline() {
-        final int[] vecSizes = vecSizes(4, 0, 4);
-        final int[] baseTypes = fp32(vecSizes);
-        final PipelineCache c = cache(0x5, vecSizes, baseTypes); // shaderInputMask = 0x5
+        final PipelineCache c = fp32Cache(0x5, 4, 0, 4); // shaderInputMask = 0x5
 
         final ContextState cs = new ContextState();
         enableFloatAttrib(cs, 0, 3, 24);
@@ -357,11 +358,10 @@ class PipelineCacheVertexInputTest {
         }
     }
 
+    /** Verifies interior gap without expansion fills gap with placeholder. */
     @Test
     void interiorGapWithoutExpansion_fillsGapWithPlaceholder() {
-        final int[] vecSizes = vecSizes(3, 0, 0, 2);
-        final int[] baseTypes = fp32(vecSizes);
-        final PipelineCache c = cache(0x9, vecSizes, baseTypes);
+        final PipelineCache c = fp32Cache(0x9, 3, 0, 0, 2);
 
         final ContextState cs = new ContextState();
         enableFloatAttrib(cs, 0, 3, 20);
@@ -389,11 +389,10 @@ class PipelineCacheVertexInputTest {
         }
     }
 
+    /** Verifies enabled attrib without pointer treated as disabled. */
     @Test
     void enabledAttribWithoutPointer_treatedAsDisabled() {
-        final int[] vecSizes = vecSizes(3, 4, 0, 2);
-        final int[] baseTypes = fp32(vecSizes);
-        final PipelineCache c = cache(0xB, vecSizes, baseTypes); // locs 0, 1, 3
+        final PipelineCache c = fp32Cache(0xB, 3, 4, 0, 2); // locs 0, 1, 3
 
         final ContextState cs = new ContextState();
         enableFloatAttrib(cs, 0, 3, 16);
@@ -440,11 +439,10 @@ class PipelineCacheVertexInputTest {
         }
     }
 
+    /** Verifies enabled attrib with dead buffer demoted to constant expansion. */
     @Test
     void enabledAttribWithDeadBuffer_demotedToConstantExpansion() {
-        final int[] vecSizes = vecSizes(3, 4);
-        final int[] baseTypes = fp32(vecSizes);
-        final PipelineCache c = cache(0x3, vecSizes, baseTypes);
+        final PipelineCache c = fp32Cache(0x3, 3, 4);
         store.setBufferHandleResolver(id -> id == 42 ? 0xBEEFL : 0L);
 
         final ContextState cs = new ContextState();
@@ -464,11 +462,10 @@ class PipelineCacheVertexInputTest {
         }
     }
 
+    /** Verifies pipeline key differs between dead and live binding. */
     @Test
     void pipelineKeyDiffersBetweenDeadAndLiveBinding() {
-        final int[] vecSizes = vecSizes(3, 4);
-        final int[] baseTypes = fp32(vecSizes);
-        final PipelineCache c = cache(0x3, vecSizes, baseTypes);
+        final PipelineCache c = fp32Cache(0x3, 3, 4);
 
         final ContextState cs = new ContextState();
         enableFloatAttrib(cs, 0, 3, 16);
@@ -531,12 +528,11 @@ class PipelineCacheVertexInputTest {
         assertTrue(keyA != keyB, "currentKey must reflect the new signature, not a stale cached input hash");
     }
 
+    /** Verifies bindings array is dense indexed by slot. */
     @Test
     void bindingsArrayIsDenseIndexedBySlot() {
         // D3D12 requirement: SDL's D3D12 backend reads vertex_buffer_descriptions[buffer_slot] as a flat array, so bindings.get(i).slot() must equal i
-        final int[] vecSizes = vecSizes(3, 0, 0, 0, 0, 2);
-        final int[] baseTypes = fp32(vecSizes);
-        final PipelineCache c = cache(0x21, vecSizes, baseTypes);
+        final PipelineCache c = fp32Cache(0x21, 3, 0, 0, 0, 0, 2);
 
         final ContextState cs = new ContextState();
         enableFloatAttrib(cs, 0, 3, 12);
@@ -552,11 +548,11 @@ class PipelineCacheVertexInputTest {
         }
     }
 
-    @Test
-    void offsetOnlyPointerChange_keepsKeyAndSkipsRecompute() {
-        final int[] vecSizes = vecSizes(3);
-        final int[] baseTypes = fp32(vecSizes);
-        final PipelineCache c = cache(0x1, vecSizes, baseTypes);
+    /** Verifies reissued pointer with same alignment keeps key and skips recompute. */
+    @ParameterizedTest(name = "second pointer offset {0}")
+    @ValueSource(longs = {104L, 100L})
+    void reissuedPointerWithSameAlignment_keepsKeyAndSkipsRecompute(long secondOffset) {
+        final PipelineCache c = fp32Cache(0x1, 3);
 
         final ContextState cs = new ContextState();
         final VertexAttribs attribs = new VertexAttribs();
@@ -565,38 +561,17 @@ class PipelineCacheVertexInputTest {
         final long keyA = c.computeKey(store, cs);
         final int runsAfterA = c.inputHashLoopRuns;
 
-        attribs.applyVertexAttribPointer(store, cs, 0, 3, GL11.GL_FLOAT, false, false, 12, 104L);
+        attribs.applyVertexAttribPointer(store, cs, 0, 3, GL11.GL_FLOAT, false, false, 12, secondOffset);
         final long keyB = c.computeKey(store, cs);
 
-        assertEquals(keyA, keyB, "an offset change that keeps the alignment class must not change the pipeline key");
-        assertEquals(runsAfterA, c.inputHashLoopRuns, "an offset-only change must not force the input-hash loop to rerun");
+        assertEquals(keyA, keyB, "a re-issued pointer that keeps the alignment class must not change the pipeline key");
+        assertEquals(runsAfterA, c.inputHashLoopRuns, "a re-issued pointer that keeps the alignment class must not force the input-hash loop to rerun");
     }
 
-    @Test
-    void identicalReissuedPointer_isNoOp() {
-        final int[] vecSizes = vecSizes(3);
-        final int[] baseTypes = fp32(vecSizes);
-        final PipelineCache c = cache(0x1, vecSizes, baseTypes);
-
-        final ContextState cs = new ContextState();
-        final VertexAttribs attribs = new VertexAttribs();
-        attribs.applyVertexAttribPointer(store, cs, 0, 3, GL11.GL_FLOAT, false, false, 12, 100L);
-
-        final long keyA = c.computeKey(store, cs);
-        final int runsAfterA = c.inputHashLoopRuns;
-
-        attribs.applyVertexAttribPointer(store, cs, 0, 3, GL11.GL_FLOAT, false, false, 12, 100L);
-        final long keyB = c.computeKey(store, cs);
-
-        assertEquals(keyA, keyB, "an identical re-issued pointer must not change the key");
-        assertEquals(runsAfterA, c.inputHashLoopRuns, "an identical re-issued pointer must be a no-op and not force a rehash");
-    }
-
+    /** Verifies two equal layout vaos share key. */
     @Test
     void twoEqualLayoutVaosShareKey() {
-        final int[] vecSizes = vecSizes(3, 4);
-        final int[] baseTypes = fp32(vecSizes);
-        final PipelineCache c = cache(0x3, vecSizes, baseTypes);
+        final PipelineCache c = fp32Cache(0x3, 3, 4);
 
         final ContextState csA = new ContextState();
         enableFloatAttrib(csA, 0, 3, 28);
@@ -609,11 +584,10 @@ class PipelineCacheVertexInputTest {
         assertEquals(c.computeKey(store, csA), c.computeKey(store, csB), "two VAOs with identical layouts must hash to the same input key");
     }
 
+    /** Verifies every layout field changes key. */
     @Test
     void everyLayoutFieldChangesKey() {
-        final int[] vecSizes = vecSizes(3);
-        final int[] baseTypes = fp32(vecSizes);
-        final PipelineCache c = cache(0x1, vecSizes, baseTypes);
+        final PipelineCache c = fp32Cache(0x1, 3);
 
         final ContextState base = new ContextState();
         enableFloatAttrib(base, 0, 3, 16);
@@ -668,11 +642,10 @@ class PipelineCacheVertexInputTest {
         assertTrue(baseKey != c.computeKey(store, disabledVariant), "enabled state must affect the input key");
     }
 
+    /** Verifies liveness gen bump forces recompute. */
     @Test
     void livenessGenBumpForcesRecompute() {
-        final int[] vecSizes = vecSizes(3);
-        final int[] baseTypes = fp32(vecSizes);
-        final PipelineCache c = cache(0x1, vecSizes, baseTypes);
+        final PipelineCache c = fp32Cache(0x1, 3);
 
         final ContextState cs = new ContextState();
         enableFloatAttrib(cs, 0, 3, 12);

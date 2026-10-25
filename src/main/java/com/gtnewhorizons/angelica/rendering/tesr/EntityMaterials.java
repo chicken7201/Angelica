@@ -30,8 +30,8 @@ public final class EntityMaterials {
     static final TesrMaterial DEPTH_ONLY = TesrMaterial.builder().depthOnly().stream().build();
     static final TesrMaterial DEPTH_ONLY_CUTOUT = TesrMaterial.builder().depthOnly().cutout(0.1f).stream().build();
     static final TesrMaterial OVERLAY = TesrMaterial.builder().translucent().depthEqual().stream().build();
-    public static final TesrMaterial GLINT = TesrMaterial.builder().glint().depthEqual().noDepthWrite().unlit().stream().special(TesrMaterial.SpecialRender.GLINT).build();
-    public static final TesrMaterial ITEM_GLINT = TesrMaterial.builder().glint().depthEqual().noDepthWrite().unlit().stream().special(TesrMaterial.SpecialRender.GLINT).build();
+    public static final TesrMaterial GLINT = glintMaterial(TesrMaterial.SpecialRender.GLINT);
+    public static final TesrMaterial ITEM_GLINT = glintMaterial(TesrMaterial.SpecialRender.ITEM_GLINT);
 
     private static final BlendState effectiveBlend = new BlendState();
     private static final AlphaState effectiveAlpha = new AlphaState();
@@ -39,7 +39,14 @@ public final class EntityMaterials {
 
     private EntityMaterials() {}
 
+    /** Returns the glint material result for EntityMaterials. */
+    private static TesrMaterial glintMaterial(TesrMaterial.SpecialRender special) {
+        return TesrMaterial.builder().glint().depthEqual().noDepthWrite().unlit().stream().special(special).build();
+    }
+
+    /** Returns the from current state result for EntityMaterials. */
     static TesrMaterial fromCurrentState(boolean texIdentity) {
+        GLStateManager.requireExitDrawState(true);
         final boolean textured = GLStateManager.getTextures().getTextureUnitStates(0).isEnabled();
         final AlphaState alpha = GLStateManager.getEffectiveAlphaState(effectiveAlpha);
         final ColorMask colorMask = GLStateManager.getEffectiveColorMask(effectiveColorMask);
@@ -53,7 +60,9 @@ public final class EntityMaterials {
             GLStateManager.isEffectiveDepthMaskEnabled());
     }
 
+    /** Returns the item from current state result for EntityMaterials. */
     public static TesrMaterial itemFromCurrentState(boolean unfilteredAtlas) {
+        GLStateManager.requireExitDrawState(true);
         final BlendState blend = GLStateManager.getEffectiveBlendState(effectiveBlend);
         final AlphaState alpha = GLStateManager.getEffectiveAlphaState(effectiveAlpha);
         return itemFromState(unfilteredAtlas, GLStateManager.isEffectiveBlendEnabled(), blend.getSrcRgb(), blend.getDstRgb(),

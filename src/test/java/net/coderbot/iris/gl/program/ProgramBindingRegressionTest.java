@@ -66,18 +66,21 @@ class ProgramBindingRegressionTest {
         }
     }
 
+    /** Verifies deletion bookkeeping retains only deferred deletes. */
     @Test
     void deletionBookkeepingRetainsOnlyDeferredDeletes() {
         final int bound = linkedProgram();
         GLStateManager.glUseProgram(bound);
         GLStateManager.glDeleteProgram(bound);
         assertTrue(GLStateManager.isProgramPendingDeletion(bound));
+        assertTrue(GL20.glIsProgram(bound), "driver keeps the bound program alive");
         final int other = linkedProgram();
         GLStateManager.glUseProgram(other);
         for (int i = 0; i < 8; i++) {
             final int unused = GLStateManager.glCreateProgram();
             GLStateManager.glDeleteProgram(unused);
             assertFalse(GLStateManager.isProgramPendingDeletion(unused));
+            assertFalse(GL20.glIsProgram(unused), "driver deletes an unbound program immediately");
             assertFalse(GLStateManager.isProgramPendingDeletion(bound));
         }
         GLStateManager.glUseProgram(0);
@@ -125,6 +128,7 @@ class ProgramBindingRegressionTest {
         }
     }
 
+    /** Verifies replay caches validity and revalidates deletion including bound programs. */
     @Test
     void replayCachesValidityAndRevalidatesDeletionIncludingBoundPrograms() {
         int id = linkedProgram();
@@ -136,14 +140,19 @@ class ProgramBindingRegressionTest {
         RenderBackend original = BackendManager.RENDER_BACKEND;
         RenderBackend backend = mock(RenderBackend.class, delegatesTo(original));
         Reflect.setStaticFinal(BackendManager.class, "RENDER_BACKEND", RenderBackend.class, backend);
+        boolean idDeleted = false;
+        boolean otherDeleted = false;
         try {
             for (int i = 0; i < 5; i++) GLStateManager.glCallList(list);
             verify(backend, times(1)).isProgram(id);
             assertEquals(id, GLStateManager.getActiveProgram());
+            assertEquals(id, GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM));
 
             GLStateManager.glDeleteProgram(id);
+            idDeleted = true;
             GLStateManager.glCallList(list); // Still valid while bound, but must not be cached.
             assertEquals(id, GLStateManager.getActiveProgram());
+            assertEquals(id, GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM));
             GLStateManager.glUseProgram(other); // Completes deferred deletion.
             GLStateManager.glCallList(list);
             assertEquals(0, GLStateManager.getActiveProgram());
@@ -152,14 +161,16 @@ class ProgramBindingRegressionTest {
             verify(backend, times(4)).isProgram(id);
 
             GLStateManager.glDeleteProgram(other);
+            otherDeleted = true;
             GLStateManager.glCallList(list);
             verify(backend, times(5)).isProgram(id);
         } finally {
             Reflect.setStaticFinal(BackendManager.class, "RENDER_BACKEND", RenderBackend.class, original);
             GLStateManager.glUseProgram(0);
             GLStateManager.glDeleteLists(list, 1);
-            if (GLStateManager.glIsProgram(id)) GLStateManager.glDeleteProgram(id);
-            if (GLStateManager.glIsProgram(other)) GLStateManager.glDeleteProgram(other);
+            // FFP's glUseProgram(0) is lazy, so other stays current; deleting it again is GL_INVALID_OPERATION on macOS
+            if (!idDeleted) GLStateManager.glDeleteProgram(id);
+            if (!otherDeleted) GLStateManager.glDeleteProgram(other);
         }
     }
 }

@@ -198,6 +198,7 @@ public class TessellatorStreamingDrawer {
         final boolean faceNormals = !tess.hasNormals && normalHandler != null
             && ImmediateExtendedAttribHandler.extPrimVerts(tess.drawMode, vertexCount) == 4 && normalHandler.wantsFaceNormals();
         final boolean fillNormal = !tess.hasNormals && !faceNormals;
+        GLStateManager.requireExitVertexDefaults(fillNormal, !tess.hasTexture, !tess.hasColor, !tess.hasBrightness);
 
         final int defaultNormal;
         if (fillNormal) {
@@ -330,9 +331,10 @@ public class TessellatorStreamingDrawer {
         return String.format("%5dB", bytes);
     }
 
+    /** Finishes the frame and retires streaming resources no longer in use. */
     public static void endFrame() {
         if (persistentBuffer != null) {
-            persistentBuffer.postDraw();
+            persistentBuffer.endFrame();
         }
     }
 

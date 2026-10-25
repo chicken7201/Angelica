@@ -114,7 +114,9 @@ public final class BatchEligibility {
 
     static boolean insideRenderer() { return depth != 0; }
 
+    /** Updates on uncaptured state state for BatchEligibility. */
     static void onUncapturedState() {
+        EntityShadowReplay.rejectUncapturedState();
         if (depth == 0) return;
         uncapturedState = true;
         allowed = false;
@@ -124,7 +126,9 @@ public final class BatchEligibility {
         if (depth != 0) expectedDraws += draws;
     }
 
+    /** Updates on bail state for BatchEligibility. */
     static void onBail(ModelPartBatcher.BailReason reason) {
+        EntityShadowReplay.rejectBatcherBail();
         if (depth == 0 || !allowed) return;
         if (reason == ModelPartBatcher.BailReason.INACTIVE) {
             allowed = false;
@@ -137,7 +141,9 @@ public final class BatchEligibility {
         parts++;
     }
 
+    /** Updates on part fallback state for BatchEligibility. */
     public static void onPartFallback(long drawsBefore, long drawsNow) {
+        EntityShadowReplay.rejectPartFallback();
         parts++;
         if (!allowed) {
             expectedDraws += drawsNow - drawsBefore;

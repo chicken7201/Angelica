@@ -45,12 +45,17 @@ public final class PersistentStreamingBuffer {
     public int getBufferId() { return ring.bufferId(); }
     public int getCapacity() { return ring.capacity(); }
     public int getRemaining() { return ring.remaining(); }
+    /** Returns fences issued for PersistentStreamingBuffer. */
+    public int getFencesIssued() { return ring.fencesIssued(); }
     public int getForcedReclaims() { return ring.forcedReclaims(); }
     public int getWraps() { return ring.wraps(); }
+    /** Returns fences issued by all rings for PersistentStreamingBuffer. */
+    public static long getFencesIssuedByAllRings() { return GlStreamingRing.totalFencesIssued(); }
 
     ByteBuffer getMappedBuffer() { return ring.mapped(); }
 
-    public void postDraw() {
+    /** Finishes the frame and retires streaming resources no longer in use. */
+    public void endFrame() {
         ring.endFrame();
     }
 
