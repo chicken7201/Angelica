@@ -1,7 +1,7 @@
 package com.gtnewhorizons.angelica.sdlgpu.glsm;
 
 import com.gtnewhorizons.angelica.glsm.EntityIdsOnlyHandler;
-import com.gtnewhorizons.angelica.glsm.GLStateManager;
+import com.gtnewhorizons.angelica.glsm.GLSMPrograms;
 import com.gtnewhorizons.angelica.glsm.GlTestSupport;
 import com.gtnewhorizons.angelica.glsm.hooks.GLSMHooks;
 import com.gtnewhorizons.angelica.glsm.hooks.ImmediateExtendedAttribHandler;
@@ -33,8 +33,8 @@ class GlsmSdlTessellatorEntityIdsTest {
     /** Restores the GL state and material IDs after each test. */
     @AfterEach
     void tearDown() {
-        GLStateManager.glUseProgram(0);
-        GLStateManager.glDeleteProgram(program);
+        GLSMPrograms.glUseProgram(0);
+        GLSMPrograms.glDeleteProgram(program);
         GLSMHooks.immediateExtendedHandler = previousHandler;
     }
 
@@ -42,7 +42,7 @@ class GlsmSdlTessellatorEntityIdsTest {
     @Test
     void idsChangedMidBatchApplyToTheVerticesAddedAfterTheChange() {
         GlsmSdlHeadlessRig.beginFrameAndClear();
-        GLStateManager.glUseProgram(program);
+        GLSMPrograms.glUseProgram(program);
         TessellatorEntityIdsFixture.drawIdsChangedMidBatch();
 
         final int[] pixels = GlsmSdlHeadlessRig.readTarget();
@@ -54,7 +54,7 @@ class GlsmSdlTessellatorEntityIdsTest {
     @Test
     void idsChangedAfterTheLastVertexLeaveTheBatchAlone() {
         GlsmSdlHeadlessRig.beginFrameAndClear();
-        GLStateManager.glUseProgram(program);
+        GLSMPrograms.glUseProgram(program);
         TessellatorEntityIdsFixture.drawIdsChangedAfterTheLastVertex();
 
         final int[] pixels = GlsmSdlHeadlessRig.readTarget();

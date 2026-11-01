@@ -3,6 +3,8 @@ package com.gtnewhorizons.angelica.glsm.hooks;
 import com.gtnewhorizons.angelica.glsm.CaptureGate;
 import com.gtnewhorizons.angelica.glsm.DisplayListManager;
 import com.gtnewhorizons.angelica.glsm.GLDebug;
+import com.gtnewhorizons.angelica.glsm.GLSMPrograms;
+import com.gtnewhorizons.angelica.glsm.GLSMTextureLifetime;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.backend.BackendManager;
 import com.gtnewhorizons.angelica.glsm.ffp.ShaderManager;
@@ -24,7 +26,7 @@ public final class FrameHooks {
             gameLoopStarted = true;
             RENDER_BACKEND.onFrameBegin();
             if (ShaderManager.getInstance().isEnabled()) {
-                GLStateManager.glUseProgram(0);
+                GLSMPrograms.glUseProgram(0);
             }
             pushFrameGroup();
         }
@@ -32,7 +34,7 @@ public final class FrameHooks {
 
     /** Updates frame end state for FrameHooks. */
     public static void frameEnd() {
-        GLStateManager.onFrameEnd();
+        GLSMTextureLifetime.onFrameEnd();
         popFrameGroup();
         RENDER_BACKEND.onFrameEnd();
     }

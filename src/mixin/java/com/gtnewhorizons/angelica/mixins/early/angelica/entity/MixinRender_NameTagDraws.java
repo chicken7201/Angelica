@@ -1,7 +1,7 @@
 package com.gtnewhorizons.angelica.mixins.early.angelica.entity;
 
 import com.gtnewhorizons.angelica.experimental.surround.Surround;
-import com.gtnewhorizons.angelica.glsm.GLStateManager;
+import com.gtnewhorizons.angelica.glsm.GLSMDraws;
 import com.gtnewhorizons.angelica.rendering.tesr.BatchEligibility;
 import com.gtnewhorizons.angelica.rendering.tesr.EntityShadowReplay;
 import net.minecraft.client.renderer.entity.Render;
@@ -15,12 +15,12 @@ public abstract class MixinRender_NameTagDraws {
     @Surround(method = "func_147906_a")
     private void angelica$countNameTagDraws() {
         EntityShadowReplay.rejectForeignDraw();
-        BatchEligibility.beginExpectedDraws(GLStateManager.drawCalls);
+        BatchEligibility.beginExpectedDraws(GLSMDraws.drawCalls);
     }
 
     /** Completes expected-draw tracking after rendering a name tag. */
     @Surround.Finally
     private void angelica$endNameTagDraws() {
-        BatchEligibility.endExpectedDraws(GLStateManager.drawCalls);
+        BatchEligibility.endExpectedDraws(GLSMDraws.drawCalls);
     }
 }

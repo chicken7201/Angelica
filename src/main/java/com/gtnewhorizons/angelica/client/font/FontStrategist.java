@@ -3,6 +3,7 @@ package com.gtnewhorizons.angelica.client.font;
 import com.google.common.collect.HashMultiset;
 import com.gtnewhorizon.gtnhlib.util.font.GlyphReplacements;
 import com.gtnewhorizons.angelica.config.FontConfig;
+import com.gtnewhorizons.angelica.glsm.GLSMTextures;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.mixins.interfaces.FontRendererAccessor;
 import cpw.mods.fml.client.SplashProgress;
@@ -164,6 +165,17 @@ public class FontStrategist {
         if (!customFontEnabled && !me.isSplash && FontGlyphRanges.isSuperscriptDigit(chr)) {
             return FontProviderUnicode.get();
         }
+        if (!me.isSplash && GLStateManager.isMainThread()) {
+            final FontProvider cached = FontProviderCache.lookup(chr, customFontEnabled, forceUnicode);
+            if (cached != null) { return cached; }
+        }
+        return searchFontProvider(me, chr, customFontEnabled, forceUnicode);
+    }
+
+    static FontProvider searchFontProvider(BatchingFontRenderer me, char chr, boolean customFontEnabled, boolean forceUnicode) {
+        if (!customFontEnabled && !me.isSplash && FontGlyphRanges.isSuperscriptDigit(chr)) {
+            return FontProviderUnicode.get();
+        }
         if (customFontEnabled && !me.isSplash) {
             // GTNH defines these glyphs in unicode_page_e0.png, so custom system fonts must not intercept them.
             if (FontGlyphRanges.isGtnhPrivateUseGlyph(chr)) {
@@ -245,25 +257,32 @@ public class FontStrategist {
     /** Maps resource indices to negative texture handles and back. */
     private static int remap(int n) { return -1 - n; }
 
+    private static final Object RESOURCE_LOCK = new Object();
     private static final List<ResourceLocation> intToResourceLocation = new ArrayList<>();
     private static final Map<ResourceLocation, Integer> resourceLocationToInt = new HashMap<>();
 
     /** Interns a resource location without resolving its GL texture. */
     static int getIntFromResourceLocation(ResourceLocation rl) {
-        Integer i = resourceLocationToInt.get(rl);
-        if (i != null) { return i; }
-        int idx = remap(intToResourceLocation.size());
-        resourceLocationToInt.put(rl, idx);
-        intToResourceLocation.add(rl);
-        return idx;
+        synchronized (RESOURCE_LOCK) {
+            Integer i = resourceLocationToInt.get(rl);
+            if (i != null) { return i; }
+            int idx = remap(intToResourceLocation.size());
+            resourceLocationToInt.put(rl, idx);
+            intToResourceLocation.add(rl);
+            return idx;
+        }
     }
 
     /** Binds a GL texture or delegates resource binding to the owning font renderer. */
     static void bindIntTexture(BatchingFontRenderer owner, int texture) {
         if (texture > 0) {
-            GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, texture);
+            GLSMTextures.glBindTexture(GL11.GL_TEXTURE_2D, texture);
         } else if (texture < 0) {
-            ((FontRendererAccessor) owner.underlying).angelica$bindTexture(intToResourceLocation.get(remap(texture)));
+            final ResourceLocation location;
+            synchronized (RESOURCE_LOCK) {
+                location = intToResourceLocation.get(remap(texture));
+            }
+            ((FontRendererAccessor) owner.underlying).angelica$bindTexture(location);
         }
     }
 }

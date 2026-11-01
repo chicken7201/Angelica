@@ -1,5 +1,19 @@
 package net.coderbot.iris.uniforms;
 
+
+import com.gtnewhorizons.angelica.glsm.GLSMAttribStack;
+import com.gtnewhorizons.angelica.glsm.GLSMBlend;
+import com.gtnewhorizons.angelica.glsm.GLSMBuffers;
+import com.gtnewhorizons.angelica.glsm.GLSMCurrentAttribs;
+import com.gtnewhorizons.angelica.glsm.GLSMDepthStencilAlpha;
+import com.gtnewhorizons.angelica.glsm.GLSMDraws;
+import com.gtnewhorizons.angelica.glsm.GLSMFramebuffer;
+import com.gtnewhorizons.angelica.glsm.GLSMLighting;
+import com.gtnewhorizons.angelica.glsm.GLSMMatrices;
+import com.gtnewhorizons.angelica.glsm.GLSMQueries;
+import com.gtnewhorizons.angelica.glsm.GLSMRasterizer;
+import com.gtnewhorizons.angelica.glsm.GLSMTextures;
+import com.gtnewhorizons.angelica.glsm.GLSMVertexInput;
 import com.gtnewhorizons.angelica.glsm.GLCoreTest;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.StateSet;
@@ -38,41 +52,41 @@ class ItemCutoutLightmapGLTest {
     /** Creates a core-profile draw with an inherited, disabled world lightmap and non-white item color. */
     @BeforeEach
     void setUp() {
-        savedDepth = GLStateManager.pushState(StateSet.forMask(GL11.GL_ALL_ATTRIB_BITS));
+        savedDepth = GLSMAttribStack.pushState(StateSet.forMask(GL11.GL_ALL_ATTRIB_BITS));
         savedBrightnessX = GLStateManager.ctx().lastBrightnessX;
         savedBrightnessY = GLStateManager.ctx().lastBrightnessY;
-        GLStateManager.glMatrixMode(GL11.GL_PROJECTION);
-        GLStateManager.glLoadIdentity();
-        GLStateManager.glMatrixMode(GL11.GL_MODELVIEW);
-        GLStateManager.glLoadIdentity();
-        GLStateManager.glViewport(0, 0, 800, 600);
-        GLStateManager.disableDepthTest();
-        GLStateManager.disableCull();
-        GLStateManager.disableBlend();
-        GLStateManager.disableLighting();
-        GLStateManager.glColor4f(0.8f, 0.8f, 0.8f, 1.0f);
-        GLStateManager.glActiveTexture(GL13.GL_TEXTURE0);
+        GLSMMatrices.glMatrixMode(GL11.GL_PROJECTION);
+        GLSMMatrices.glLoadIdentity();
+        GLSMMatrices.glMatrixMode(GL11.GL_MODELVIEW);
+        GLSMMatrices.glLoadIdentity();
+        GLSMRasterizer.glViewport(0, 0, 800, 600);
+        GLSMDepthStencilAlpha.disableDepthTest();
+        GLSMRasterizer.disableCull();
+        GLSMBlend.disableBlend();
+        GLSMLighting.disableLighting();
+        GLSMCurrentAttribs.glColor4f(0.8f, 0.8f, 0.8f, 1.0f);
+        GLSMTextures.glActiveTexture(GL13.GL_TEXTURE0);
         atlas = createTexture(255, 255, 255);
-        GLStateManager.enableTexture();
-        GLStateManager.glActiveTexture(GL13.GL_TEXTURE1);
+        GLSMTextures.enableTexture();
+        GLSMTextures.glActiveTexture(GL13.GL_TEXTURE1);
         lightmap = createTexture(255, 255, 255);
-        GLStateManager.disableTexture();
-        GLStateManager.glMatrixMode(GL11.GL_TEXTURE);
-        GLStateManager.glLoadIdentity();
-        GLStateManager.glScalef(1.0f / 256, 1.0f / 256, 1.0f / 256);
-        GLStateManager.glTranslatef(8, 8, 8);
-        GLStateManager.glMatrixMode(GL11.GL_MODELVIEW);
-        GLStateManager.setLightmapTextureCoords(GL13.GL_TEXTURE1, 144, 16);
-        GLStateManager.glActiveTexture(GL13.GL_TEXTURE0);
-        vao = GLStateManager.glGenVertexArrays();
-        GLStateManager.glBindVertexArray(vao);
-        vbo = GLStateManager.glGenBuffers();
-        GLStateManager.glBindBuffer(GL15.GL_ARRAY_BUFFER, vbo);
+        GLSMTextures.disableTexture();
+        GLSMMatrices.glMatrixMode(GL11.GL_TEXTURE);
+        GLSMMatrices.glLoadIdentity();
+        GLSMMatrices.glScalef(1.0f / 256, 1.0f / 256, 1.0f / 256);
+        GLSMMatrices.glTranslatef(8, 8, 8);
+        GLSMMatrices.glMatrixMode(GL11.GL_MODELVIEW);
+        GLSMCurrentAttribs.setLightmapTextureCoords(GL13.GL_TEXTURE1, 144, 16);
+        GLSMTextures.glActiveTexture(GL13.GL_TEXTURE0);
+        vao = GLSMVertexInput.glGenVertexArrays();
+        GLSMVertexInput.glBindVertexArray(vao);
+        vbo = GLSMBuffers.glGenBuffers();
+        GLSMBuffers.glBindBuffer(GL15.GL_ARRAY_BUFFER, vbo);
         FloatBuffer positions = BufferUtils.createFloatBuffer(9);
         positions.put(new float[] { -0.9f, -0.9f, 0, 0.9f, -0.9f, 0, 0, 0.9f, 0 }).flip();
-        GLStateManager.glBufferData(GL15.GL_ARRAY_BUFFER, positions, GL15.GL_STATIC_DRAW);
-        GLStateManager.glEnableVertexAttribArray(0);
-        GLStateManager.glVertexAttribPointer(0, 3, GL11.GL_FLOAT, false, 12, 0L);
+        GLSMBuffers.glBufferData(GL15.GL_ARRAY_BUFFER, positions, GL15.GL_STATIC_DRAW);
+        GLSMVertexInput.glEnableVertexAttribArray(0);
+        GLSMVertexInput.glVertexAttribPointer(0, 3, GL11.GL_FLOAT, false, 12, 0L);
         VAOManager.setCurrentVertexFlags(0);
         ShaderManager.enable();
         ShaderManager.getInstance().activate();
@@ -82,17 +96,17 @@ class ItemCutoutLightmapGLTest {
     @AfterEach
     void cleanup() {
         ShaderManager.getInstance().deactivate();
-        GLStateManager.glBindVertexArray(0);
-        if (vbo != 0) GLStateManager.glDeleteBuffers(vbo);
-        if (vao != 0) GLStateManager.glDeleteVertexArrays(vao);
-        GLStateManager.glActiveTexture(GL13.GL_TEXTURE0);
-        GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, 0);
-        GLStateManager.glActiveTexture(GL13.GL_TEXTURE1);
-        GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, 0);
-        if (atlas != 0) GLStateManager.glDeleteTextures(atlas);
-        if (lightmap != 0) GLStateManager.glDeleteTextures(lightmap);
-        GLStateManager.setLightmapTextureCoords(GL13.GL_TEXTURE1, savedBrightnessX, savedBrightnessY);
-        GLStateManager.popStateTo(savedDepth);
+        GLSMVertexInput.glBindVertexArray(0);
+        if (vbo != 0) GLSMBuffers.glDeleteBuffers(vbo);
+        if (vao != 0) GLSMVertexInput.glDeleteVertexArrays(vao);
+        GLSMTextures.glActiveTexture(GL13.GL_TEXTURE0);
+        GLSMTextures.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+        GLSMTextures.glActiveTexture(GL13.GL_TEXTURE1);
+        GLSMTextures.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+        if (atlas != 0) GLSMTextures.glDeleteTextures(atlas);
+        if (lightmap != 0) GLSMTextures.glDeleteTextures(lightmap);
+        GLSMCurrentAttribs.setLightmapTextureCoords(GL13.GL_TEXTURE1, savedBrightnessX, savedBrightnessY);
+        GLSMAttribStack.popStateTo(savedDepth);
     }
 
     /** Ensures changing a bound Night Vision lightmap cannot tint a HUD item while that unit is disabled. */
@@ -117,19 +131,19 @@ class ItemCutoutLightmapGLTest {
     /** Checks nested cutout scopes restore alpha and lightmap state even when a custom renderer fails. */
     @Test
     void nestedRendererFailurePreservesBindingsColorLightingAndAlpha() {
-        GLStateManager.glActiveTexture(GL13.GL_TEXTURE3);
-        GLStateManager.disableAlphaTest();
-        GLStateManager.glAlphaFunc(GL11.GL_NOTEQUAL, 0.35f);
-        GLStateManager.enableLighting();
+        GLSMTextures.glActiveTexture(GL13.GL_TEXTURE3);
+        GLSMDepthStencilAlpha.disableAlphaTest();
+        GLSMDepthStencilAlpha.glAlphaFunc(GL11.GL_NOTEQUAL, 0.35f);
+        GLSMLighting.enableLighting();
         int outer = ItemIdManager.beginCutout(null);
         try {
             assertFalse(FragmentKey.fromState().lightmapEnabled());
-            assertEquals(GL11.GL_GREATER, GLStateManager.getAlphaState().getFunction());
-            assertEquals(0.1f, GLStateManager.getAlphaState().getReference());
+            assertEquals(GL11.GL_GREATER, GLStateManager.ctx().alphaState.getFunction());
+            assertEquals(0.1f, GLStateManager.ctx().alphaState.getReference());
             assertThrows(IllegalStateException.class, () -> {
                 int inner = ItemIdManager.beginCutout(null);
                 try {
-                    GLStateManager.getTextures().getTextureUnitStates(1).enable();
+                    GLSMTextures.getTextures().getTextureUnitStates(1).enable();
                     throw new IllegalStateException("custom item renderer failed");
                 } finally {
                     ItemIdManager.endCutout(inner);
@@ -140,10 +154,10 @@ class ItemCutoutLightmapGLTest {
         } finally {
             ItemIdManager.endCutout(outer);
         }
-        assertFalse(GLStateManager.getAlphaTest().isEnabled());
-        assertEquals(GL11.GL_NOTEQUAL, GLStateManager.getAlphaState().getFunction());
-        assertEquals(0.35f, GLStateManager.getAlphaState().getReference());
-        assertEquals(savedDepth + 1, GLStateManager.getAttribDepth());
+        assertFalse(GLStateManager.ctx().alphaTest.isEnabled());
+        assertEquals(GL11.GL_NOTEQUAL, GLStateManager.ctx().alphaState.getFunction());
+        assertEquals(0.35f, GLStateManager.ctx().alphaState.getReference());
+        assertEquals(savedDepth + 1, GLSMAttribStack.getAttribDepth());
         verifyInheritedState();
     }
 
@@ -152,16 +166,16 @@ class ItemCutoutLightmapGLTest {
     void explicitHandDefaultsStillEnableLightmap() {
         GbufferPrograms.setCutoutDefaults();
         assertTrue(FragmentKey.fromState().lightmapEnabled());
-        assertTrue(GLStateManager.getAlphaTest().isEnabled());
+        assertTrue(GLStateManager.ctx().alphaTest.isEnabled());
     }
 
     /** Allocates a small complete texture on the currently selected unit. */
     private static int createTexture(int red, int green, int blue) {
-        int texture = GLStateManager.glGenTextures();
-        GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, texture);
+        int texture = GLSMTextures.glGenTextures();
+        GLSMTextures.glBindTexture(GL11.GL_TEXTURE_2D, texture);
         upload(red, green, blue);
-        GLStateManager.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
-        GLStateManager.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+        GLSMTextures.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+        GLSMTextures.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
         return texture;
     }
 
@@ -170,23 +184,23 @@ class ItemCutoutLightmapGLTest {
         ByteBuffer pixels = BufferUtils.createByteBuffer(16 * 16 * 4);
         for (int i = 0; i < 16 * 16; i++) pixels.put((byte) red).put((byte) green).put((byte) blue).put((byte) 255);
         pixels.flip();
-        GLStateManager.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGBA8, 16, 16, 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, pixels);
+        GLSMTextures.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGBA8, 16, 16, 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, pixels);
     }
 
     /** Changes only the lightmap contents while preserving its binding and enable state. */
     private static void replaceLightmap(int red, int green, int blue) {
-        GLStateManager.glActiveTexture(GL13.GL_TEXTURE1);
+        GLSMTextures.glActiveTexture(GL13.GL_TEXTURE1);
         upload(red, green, blue);
-        GLStateManager.glActiveTexture(GL13.GL_TEXTURE0);
+        GLSMTextures.glActiveTexture(GL13.GL_TEXTURE0);
     }
 
     /** Renders through the same cutout scope injected into RenderItem and reads an actual framebuffer pixel. */
     private static int[] renderCutoutPixel(boolean lightmapEnabled) {
-        GLStateManager.getTextures().getTextureUnitStates(1).setEnabled(lightmapEnabled);
+        GLSMTextures.getTextures().getTextureUnitStates(1).setEnabled(lightmapEnabled);
         int depth = ItemIdManager.beginCutout(null);
         try {
-            GLStateManager.glClear(GL11.GL_COLOR_BUFFER_BIT);
-            GLStateManager.glDrawArrays(GL11.GL_TRIANGLES, 0, 3);
+            GLSMFramebuffer.glClear(GL11.GL_COLOR_BUFFER_BIT);
+            GLSMDraws.glDrawArrays(GL11.GL_TRIANGLES, 0, 3);
             ByteBuffer pixel = BufferUtils.createByteBuffer(4);
             GL11.glReadPixels(400, 200, 1, 1, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, pixel);
             return new int[] { pixel.get(0) & 255, pixel.get(1) & 255, pixel.get(2) & 255 };
@@ -199,15 +213,15 @@ class ItemCutoutLightmapGLTest {
     /** Compares native binding/active-unit queries with GLSM and checks the untouched FFP state. */
     private void verifyInheritedState() {
         assertEquals(GL13.GL_TEXTURE3, GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE));
-        assertEquals(GL13.GL_TEXTURE3, GLStateManager.glGetInteger(GL13.GL_ACTIVE_TEXTURE));
-        assertEquals(0.8f, GLStateManager.getColor().getRed());
-        assertEquals(0.8f, GLStateManager.getColor().getGreen());
-        assertEquals(0.8f, GLStateManager.getColor().getBlue());
-        assertTrue(GLStateManager.getLightingState().isEnabled());
-        assertEquals(GL11.glIsEnabled(GL11.GL_BLEND), GLStateManager.getBlendMode().isEnabled());
+        assertEquals(GL13.GL_TEXTURE3, GLSMQueries.glGetInteger(GL13.GL_ACTIVE_TEXTURE));
+        assertEquals(0.8f, GLSMCurrentAttribs.getColor().getRed());
+        assertEquals(0.8f, GLSMCurrentAttribs.getColor().getGreen());
+        assertEquals(0.8f, GLSMCurrentAttribs.getColor().getBlue());
+        assertTrue(GLSMLighting.getLightingState().isEnabled());
+        assertEquals(GL11.glIsEnabled(GL11.GL_BLEND), GLSMBlend.getBlendMode().isEnabled());
         for (int unit = 0; unit < 2; unit++) {
             GL13.glActiveTexture(GL13.GL_TEXTURE0 + unit);
-            assertEquals(GLStateManager.getTextures().getTextureUnitBindings(unit).getBinding(), GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D));
+            assertEquals(GLSMTextures.getTextures().getTextureUnitBindings(unit).getBinding(), GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D));
         }
         GL13.glActiveTexture(GL13.GL_TEXTURE3);
     }

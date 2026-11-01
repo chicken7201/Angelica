@@ -25,14 +25,14 @@ class GLSM_ExitTextureFilter_GLTest {
     /** Updates up for GLSM_ExitTextureFilter_GLTest. */
     @BeforeEach
     void setUp() {
-        outer = GLStateManager.pushState(StateSet.forMask(GL11.GL_TEXTURE_BIT));
-        GLStateManager.glActiveTexture(GL13.GL_TEXTURE0);
-        texture = GLStateManager.glGenTextures();
-        otherTexture = GLStateManager.glGenTextures();
-        GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, otherTexture);
-        GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, texture);
-        GLStateManager.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR_MIPMAP_LINEAR);
-        GLStateManager.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR);
+        outer = GLSMAttribStack.pushState(StateSet.forMask(GL11.GL_TEXTURE_BIT));
+        GLSMTextures.glActiveTexture(GL13.GL_TEXTURE0);
+        texture = GLSMTextures.glGenTextures();
+        otherTexture = GLSMTextures.glGenTextures();
+        GLSMTextures.glBindTexture(GL11.GL_TEXTURE_2D, otherTexture);
+        GLSMTextures.glBindTexture(GL11.GL_TEXTURE_2D, texture);
+        GLSMTextures.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR_MIPMAP_LINEAR);
+        GLSMTextures.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR);
     }
 
     /** Updates tear down state for GLSM_ExitTextureFilter_GLTest. */
@@ -40,9 +40,9 @@ class GLSM_ExitTextureFilter_GLTest {
     void tearDown() {
         GLStateManager.cancelExitCapture();
         TextureUtilHooks.clearSavedFilterTexture();
-        GLStateManager.glDeleteTextures(texture);
-        GLStateManager.glDeleteTextures(otherTexture);
-        GLStateManager.popStateTo(outer);
+        GLSMTextures.glDeleteTextures(texture);
+        GLSMTextures.glDeleteTextures(otherTexture);
+        GLSMAttribStack.popStateTo(outer);
     }
 
     /** Verifies nearest filter save and restore is allowed and apply leaves filters alone. */
@@ -59,8 +59,8 @@ class GLSM_ExitTextureFilter_GLTest {
         assertFilters(GL11.GL_LINEAR_MIPMAP_LINEAR, GL11.GL_LINEAR);
         assertEquals(0, GLStateManager.ctx().savedFilterTextureId);
 
-        GLStateManager.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR);
-        GLStateManager.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+        GLSMTextures.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR);
+        GLSMTextures.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
         assertTrue(GLStateManager.canApplyExitState(state));
         GLStateManager.applyExitState(state);
         assertFilters(GL11.GL_LINEAR, GL11.GL_NEAREST);
@@ -97,9 +97,9 @@ class GLSM_ExitTextureFilter_GLTest {
         GLStateManager.beginExitCapture(state);
         save(false, false, 1);
         switch (operation) {
-            case 0 -> GLStateManager.glGetTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER);
-            case 1 -> GLStateManager.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
-            case 2 -> GLStateManager.glTexParameterf(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+            case 0 -> GLSMTextures.glGetTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER);
+            case 1 -> GLSMTextures.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+            case 2 -> GLSMTextures.glTexParameterf(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
             default -> throw new AssertionError();
         }
         restore();
@@ -180,14 +180,14 @@ class GLSM_ExitTextureFilter_GLTest {
     private boolean save(boolean blurred, boolean mipmap, float aniso) {
         final boolean captured = TextureUtilHooks.beginFilterSave(blurred, mipmap, aniso);
         try {
-            savedMin = GLStateManager.glGetTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER);
-            savedMag = GLStateManager.glGetTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER);
-            savedAniso = GLStateManager.glGetTexParameterf(GL11.GL_TEXTURE_2D, EXTTextureFilterAnisotropic.GL_TEXTURE_MAX_ANISOTROPY_EXT);
-            GLStateManager.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER,
+            savedMin = GLSMTextures.glGetTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER);
+            savedMag = GLSMTextures.glGetTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER);
+            savedAniso = GLSMTextures.glGetTexParameterf(GL11.GL_TEXTURE_2D, EXTTextureFilterAnisotropic.GL_TEXTURE_MAX_ANISOTROPY_EXT);
+            GLSMTextures.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER,
                 blurred ? (mipmap ? GL11.GL_LINEAR_MIPMAP_LINEAR : GL11.GL_LINEAR)
                     : (mipmap ? GL11.GL_NEAREST_MIPMAP_LINEAR : GL11.GL_NEAREST));
-            GLStateManager.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, blurred ? GL11.GL_LINEAR : GL11.GL_NEAREST);
-            GLStateManager.glTexParameterf(GL11.GL_TEXTURE_2D, EXTTextureFilterAnisotropic.GL_TEXTURE_MAX_ANISOTROPY_EXT, aniso);
+            GLSMTextures.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, blurred ? GL11.GL_LINEAR : GL11.GL_NEAREST);
+            GLSMTextures.glTexParameterf(GL11.GL_TEXTURE_2D, EXTTextureFilterAnisotropic.GL_TEXTURE_MAX_ANISOTROPY_EXT, aniso);
             if (failOperation) throw new IllegalStateException("filter save failed");
         } catch (RuntimeException | Error failure) {
             TextureUtilHooks.filterFailed(captured);

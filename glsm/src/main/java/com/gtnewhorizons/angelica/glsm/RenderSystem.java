@@ -159,8 +159,8 @@ public class RenderSystem {
             maxSSBOBindings = 0;
         }
 
-        // Check for sampler objects support (GL 3.3+ or ARB extension)
-        supportsSamplerObjects = GLStateManager.capabilities.OpenGL33 || GLStateManager.capabilities.GL_ARB_sampler_objects;
+        supportsSamplerObjects = isGLES ? glesVersion >= 300
+            : GLStateManager.capabilities.OpenGL33 || GLStateManager.capabilities.GL_ARB_sampler_objects;
         if (supportsSamplerObjects) {
             maxCombinedTextureImageUnits = RENDER_BACKEND.getInteger(GL20.GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS);
         }
@@ -213,14 +213,14 @@ public class RenderSystem {
     /** Updates tex image2 d state for RenderSystem. */
     public static void texImage2D(int texture, int target, int level, int internalformat, int width, int height, int border, int format, int type, @Nullable ByteBuffer pixels) {
         GLStateManager.rejectExitCapture();
-        final GLStateManager.GLESTexImageRemap remap = GLStateManager.remapTexImageForGLES(internalformat, format, type);
+        final GLSMTextures.GLESTexImageRemap remap = GLSMTextures.remapTexImageForGLES(internalformat, format, type);
         internalformat = remap.internalFormat();
         format = remap.format();
         type = remap.type();
-        GLStateManager.glBindTexture(target, texture);
-        GLStateManager.suspendPixelUnpackBuffer();
+        GLSMTextures.glBindTexture(target, texture);
+        GLSMBuffers.suspendPixelUnpackBuffer();
         RENDER_BACKEND.texImage2D(target, level, internalformat, width, height, border, format, type, pixels);
-        GLStateManager.restorePixelUnpackBuffer();
+        GLSMBuffers.restorePixelUnpackBuffer();
         if (target == GL11.GL_TEXTURE_2D && level == 0) {
             TextureInfoCache.INSTANCE.onTexImage2D(target, level, internalformat, width, height, border, format, type, pixels);
         }
@@ -233,7 +233,7 @@ public class RenderSystem {
     }
 
     public static void copyTexImage2D(int target, int level, int internalFormat, int x, int y, int width, int height, int border) {
-        GLStateManager.glCopyTexImage2D(target, level, internalFormat, x, y, width, height, border);
+        GLSMTextures.glCopyTexImage2D(target, level, internalFormat, x, y, width, height, border);
     }
 
     /** Updates uniform1f state for RenderSystem. */
@@ -324,55 +324,55 @@ public class RenderSystem {
     /** Updates texture image2 d state for RenderSystem. */
     public static void textureImage2D(int texture, int target, int level, int internalformat, int width, int height, int border, int format, int type, ByteBuffer pixels) {
         GLStateManager.rejectExitCapture();
-        GLStateManager.suspendPixelUnpackBuffer();
+        GLSMBuffers.suspendPixelUnpackBuffer();
         dsaState.textureImage2D(texture, target, level, internalformat, width, height, border, format, type, pixels);
-        GLStateManager.restorePixelUnpackBuffer();
+        GLSMBuffers.restorePixelUnpackBuffer();
         TextureInfoCache.INSTANCE.onTextureImage2D(texture, target, level, internalformat, width, height);
     }
 
     /** Updates texture image2 d state for RenderSystem. */
     public static void textureImage2D(int texture, int target, int level, int internalformat, int width, int height, int border, int format, int type, IntBuffer pixels) {
         GLStateManager.rejectExitCapture();
-        GLStateManager.suspendPixelUnpackBuffer();
+        GLSMBuffers.suspendPixelUnpackBuffer();
         dsaState.textureImage2D(texture, target, level, internalformat, width, height, border, format, type, pixels);
-        GLStateManager.restorePixelUnpackBuffer();
+        GLSMBuffers.restorePixelUnpackBuffer();
         TextureInfoCache.INSTANCE.onTextureImage2D(texture, target, level, internalformat, width, height);
     }
 
     /** Updates texture sub image2 d state for RenderSystem. */
     public static void textureSubImage2D(int texture, int target, int level, int xoffset, int yoffset, int width, int height, int format, int type, ByteBuffer pixels) {
         GLStateManager.rejectExitCapture();
-        GLStateManager.suspendPixelUnpackBuffer();
+        GLSMBuffers.suspendPixelUnpackBuffer();
         dsaState.textureSubImage2D(texture, target, level, xoffset, yoffset, width, height, format, type, pixels);
-        GLStateManager.restorePixelUnpackBuffer();
+        GLSMBuffers.restorePixelUnpackBuffer();
         if (level == 0) TextureInfoCache.INSTANCE.onContentsChanged(texture);
     }
 
     /** Updates texture sub image2 d state for RenderSystem. */
     public static void textureSubImage2D(int texture, int target, int level, int xoffset, int yoffset, int width, int height, int format, int type, IntBuffer pixels) {
         GLStateManager.rejectExitCapture();
-        GLStateManager.suspendPixelUnpackBuffer();
+        GLSMBuffers.suspendPixelUnpackBuffer();
         dsaState.textureSubImage2D(texture, target, level, xoffset, yoffset, width, height, format, type, pixels);
-        GLStateManager.restorePixelUnpackBuffer();
+        GLSMBuffers.restorePixelUnpackBuffer();
         if (level == 0) TextureInfoCache.INSTANCE.onContentsChanged(texture);
     }
 
     /** Updates tex image1 d state for RenderSystem. */
     public static void texImage1D(int texture, int target, int level, int internalformat, int width, int border, int format, int type, ByteBuffer pixels) {
         GLStateManager.rejectExitCapture();
-        GLStateManager.glBindTexture(target, texture);
-        GLStateManager.suspendPixelUnpackBuffer();
+        GLSMTextures.glBindTexture(target, texture);
+        GLSMBuffers.suspendPixelUnpackBuffer();
         RENDER_BACKEND.texImage1D(target, level, internalformat, width, border, format, type, pixels);
-        GLStateManager.restorePixelUnpackBuffer();
+        GLSMBuffers.restorePixelUnpackBuffer();
     }
 
     /** Updates tex image3 d state for RenderSystem. */
     public static void texImage3D(int texture, int target, int level, int internalformat, int width, int height, int depth, int border, int format, int type, ByteBuffer pixels) {
         GLStateManager.rejectExitCapture();
-        GLStateManager.glBindTexture(target, texture);
-        GLStateManager.suspendPixelUnpackBuffer();
+        GLSMTextures.glBindTexture(target, texture);
+        GLSMBuffers.suspendPixelUnpackBuffer();
         RENDER_BACKEND.texImage3D(target, level, internalformat, width, height, depth, border, format, type, pixels);
-        GLStateManager.restorePixelUnpackBuffer();
+        GLSMBuffers.restorePixelUnpackBuffer();
     }
 
     /** Returns program info log for RenderSystem. */
@@ -408,13 +408,13 @@ public class RenderSystem {
     /** Reads pixels for RenderSystem. */
     public static void readPixels(int x, int y, int width, int height, int format, int type, FloatBuffer pixels) {
         GLStateManager.rejectExitCapture();
-        GLStateManager.suspendPixelPackBuffer();
+        GLSMBuffers.suspendPixelPackBuffer();
         RENDER_BACKEND.readPixels(x, y, width, height, format, type, pixels);
-        GLStateManager.restorePixelPackBuffer();
+        GLSMBuffers.restorePixelPackBuffer();
     }
 
     public static void bufferData(int target, FloatBuffer data, int usage) {
-        GLStateManager.glBufferData(target, data, usage);
+        GLSMBuffers.glBufferData(target, data, usage);
     }
 
     /** Returns the buffer storage result for RenderSystem. */
@@ -460,7 +460,7 @@ public class RenderSystem {
     }
 
     public static void bindImageTexture(int unit, int texture, int level, boolean layered, int layer, int access, int format) {
-        GLStateManager.glBindImageTexture(unit, texture, level, layered, layer, access, format);
+        GLSMTextures.glBindImageTexture(unit, texture, level, layered, layer, access, format);
     }
 
     public static int getMaxImageUnits() {
@@ -477,9 +477,9 @@ public class RenderSystem {
     }
 
     private static boolean hasExtension(String name) {
-        final int count = GLStateManager.glGetInteger(GL30.GL_NUM_EXTENSIONS);
+        final int count = GLSMQueries.glGetInteger(GL30.GL_NUM_EXTENSIONS);
         for (int i = 0; i < count; i++) {
-            if (name.equals(GLStateManager.glGetStringi(GL11.GL_EXTENSIONS, i))) return true;
+            if (name.equals(GLSMQueries.glGetStringi(GL11.GL_EXTENSIONS, i))) return true;
         }
         return false;
     }
@@ -577,7 +577,7 @@ public class RenderSystem {
     }
 
     public static void bindBuffer(int target, int buffer) {
-        GLStateManager.glBindBuffer(target, buffer);
+        GLSMBuffers.glBindBuffer(target, buffer);
     }
 
     /** Updates memory barrier state for RenderSystem. */
@@ -593,55 +593,55 @@ public class RenderSystem {
     }
 
     public static void disableBufferBlend(int buffer) {
-        GLStateManager.glDisablei(GL11.GL_BLEND, buffer);
+        GLSMEnable.glDisablei(GL11.GL_BLEND, buffer);
     }
 
     public static void enableBufferBlend(int buffer) {
-        GLStateManager.glEnablei(GL11.GL_BLEND, buffer);
+        GLSMEnable.glEnablei(GL11.GL_BLEND, buffer);
     }
 
     public static void blendFuncSeparatei(int buffer, int srcRGB, int dstRGB, int srcAlpha, int dstAlpha) {
-        GLStateManager.glBlendFuncSeparatei(buffer, srcRGB, dstRGB, srcAlpha, dstAlpha);
+        GLSMBlend.glBlendFuncSeparatei(buffer, srcRGB, dstRGB, srcAlpha, dstAlpha);
     }
 
     /** Binds texture to unit for RenderSystem. */
     public static void bindTextureToUnit(int unit, int texture) {
         if (unit == 0) GLStateManager.recordExitTextureBind(GL11.GL_TEXTURE_2D, 0);
-        else if (GLStateManager.getBoundTextureForServerState(unit) != texture) GLStateManager.beforeUncapturedStateChange();
+        else if (GLSMTextures.getBoundTextureForServerState(unit) != texture) GLStateManager.beforeUncapturedStateChange();
         dsaState.bindTextureToUnit(unit, texture);
     }
 
     /** Binds texture to unit for RenderSystem. */
     public static void bindTextureToUnit(int target, int unit, int texture) {
         if (unit == 0) GLStateManager.recordExitTextureBind(target, 0);
-        else if (GLStateManager.getBoundTextureForServerState(unit) != texture) GLStateManager.beforeUncapturedStateChange();
+        else if (GLSMTextures.getBoundTextureForServerState(unit) != texture) GLStateManager.beforeUncapturedStateChange();
         dsaState.bindTextureToUnit(target, unit, texture);
     }
 
     public static void setupProjectionMatrix(Matrix4f matrix) {
         final FloatBuffer projectionMatrixBuffer = GLStateManager.ctx().projectionMatrixBuffer;
-        GLStateManager.glMatrixMode(GL11.GL_PROJECTION);
-        GLStateManager.glPushMatrix();
+        GLSMMatrices.glMatrixMode(GL11.GL_PROJECTION);
+        GLSMMatrices.glPushMatrix();
         matrix.get(0, projectionMatrixBuffer);
-        GLStateManager.glLoadMatrix(projectionMatrixBuffer);
-        GLStateManager.glMatrixMode(GL11.GL_MODELVIEW);
+        GLSMMatrices.glLoadMatrix(projectionMatrixBuffer);
+        GLSMMatrices.glMatrixMode(GL11.GL_MODELVIEW);
     }
 
     public static void restoreProjectionMatrix() {
-        GLStateManager.glMatrixMode(GL11.GL_PROJECTION);
-        GLStateManager.glPopMatrix();
-        GLStateManager.glMatrixMode(GL11.GL_MODELVIEW);
+        GLSMMatrices.glMatrixMode(GL11.GL_PROJECTION);
+        GLSMMatrices.glPopMatrix();
+        GLSMMatrices.glMatrixMode(GL11.GL_MODELVIEW);
     }
 
     /** Updates blit framebuffer state for RenderSystem. */
     public static void blitFramebuffer(int source, int dest, int offsetX, int offsetY, int width, int height, int offsetX2, int offsetY2, int width2, int height2, int bufferChoice, int filter) {
         GLStateManager.rejectExitCapture();
-        final boolean scissor = GLStateManager.glIsEnabled(GL11.GL_SCISSOR_TEST);
-        if (scissor) GLStateManager.glDisable(GL11.GL_SCISSOR_TEST);
+        final boolean scissor = GLSMEnable.glIsEnabled(GL11.GL_SCISSOR_TEST);
+        if (scissor) GLSMEnable.glDisable(GL11.GL_SCISSOR_TEST);
         try {
             dsaState.blitFramebuffer(source, dest, offsetX, offsetY, width, height, offsetX2, offsetY2, width2, height2, bufferChoice, filter);
         } finally {
-            if (scissor) GLStateManager.glEnable(GL11.GL_SCISSOR_TEST);
+            if (scissor) GLSMEnable.glEnable(GL11.GL_SCISSOR_TEST);
         }
     }
 
@@ -667,31 +667,31 @@ public class RenderSystem {
     }
 
     public static int createBuffers() {
-        return GLStateManager.glGenBuffers();
+        return GLSMBuffers.glGenBuffers();
     }
 
     /** Returns an indexed buffer binding from tracked state or the backend. */
     public static int getIndexedBufferBinding(int target, int index) {
         GLStateManager.rejectExitCapture();
-        return GLStateManager.getIndexedBufferBinding(target, index);
+        return GLSMBuffers.getIndexedBufferBinding(target, index);
     }
 
     public static void bindBufferBase(int target, int index, int buffer) {
-        GLStateManager.glBindBufferBase(target, index, buffer);
+        GLSMBuffers.glBindBufferBase(target, index, buffer);
     }
 
     public static void bufferStorage(int target, long size, int flags) {
-        GLStateManager.glBufferStorage(target, size, flags);
+        GLSMBuffers.glBufferStorage(target, size, flags);
     }
 
     public static void clearBufferSubData(int target, int internalFormat, long offset, long size, int format, int type, int[] data) {
         final ByteBuffer buf = BufferUtils.createByteBuffer(data.length * 4);
         buf.asIntBuffer().put(data);
-        GLStateManager.glClearBufferSubData(target, internalFormat, offset, size, format, type, buf);
+        GLSMBuffers.glClearBufferSubData(target, internalFormat, offset, size, format, type, buf);
     }
 
     public static void deleteBuffers(int buffer) {
-        GLStateManager.glDeleteBuffers(buffer);
+        GLSMBuffers.glDeleteBuffers(buffer);
     }
 
     public static long getVRAM() {
@@ -740,37 +740,32 @@ public class RenderSystem {
 
     public static int genSampler() {
         if (!supportsSamplerObjects) return 0;
-        return GLStateManager.glGenSamplers();
+        return GLSMTextures.glGenSamplers();
     }
 
     public static void destroySampler(int sampler) {
         if (!supportsSamplerObjects || sampler == 0) return;
-        GLStateManager.glDeleteSamplers(sampler);
+        GLSMTextures.glDeleteSamplers(sampler);
     }
 
     public static void samplerParameteri(int sampler, int pname, int param) {
         if (!supportsSamplerObjects || sampler == 0) return;
-        GLStateManager.glSamplerParameteri(sampler, pname, param);
+        GLSMTextures.glSamplerParameteri(sampler, pname, param);
     }
 
     public static void samplerParameterf(int sampler, int pname, float param) {
         if (!supportsSamplerObjects || sampler == 0) return;
-        GLStateManager.glSamplerParameterf(sampler, pname, param);
+        GLSMTextures.glSamplerParameterf(sampler, pname, param);
     }
 
     public static void bindSamplerToUnit(int unit, int sampler) {
         if (!supportsSamplerObjects) return;
-        GLStateManager.glBindSampler(unit, sampler);
+        GLSMTextures.glBindSampler(unit, sampler);
     }
 
     public static void unbindAllSamplers() {
         if (!supportsSamplerObjects) return;
-        final int count = GLStateManager.getSamplerUnitCount();
-        for (int i = 0; i < count; i++) {
-            if (GLStateManager.getSamplerBinding(i) != 0) {
-                GLStateManager.glBindSampler(i, 0);
-            }
-        }
+        GLSMTextures.unbindAllSamplers();
     }
 
     /** Parse a GL version string (e.g. "4.6.0 NVIDIA ...") into concatenated digits "460". Strips

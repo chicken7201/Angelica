@@ -1,6 +1,6 @@
 package com.gtnewhorizons.angelica.sdlgpu.glsm;
 
-import com.gtnewhorizons.angelica.glsm.GLStateManager;
+import com.gtnewhorizons.angelica.glsm.GLSMPrograms;
 import com.gtnewhorizons.angelica.glsm.GlTestSupport;
 import com.gtnewhorizons.angelica.glsm.ffp.CubeInstancedAttribs;
 import com.gtnewhorizons.angelica.glsm.ffp.InstancedAttribs;
@@ -37,10 +37,10 @@ class GlsmSdlAttribBindingTest {
     void instancedEntityIdsStayAtTheInstanceSlot() {
         final int program = linkWithIrisBindings(INSTANCED_VERTEX);
         try {
-            assertEquals(InstancedAttribs.LOC_ENTITY, GLStateManager.glGetAttribLocation(program, "iris_InstEntity"));
-            assertEquals(CubeInstancedAttribs.LOC_CUBE_TEX, GLStateManager.glGetAttribLocation(program, "iris_CubeTex"));
+            assertEquals(InstancedAttribs.LOC_ENTITY, GLSMPrograms.glGetAttribLocation(program, "iris_InstEntity"));
+            assertEquals(CubeInstancedAttribs.LOC_CUBE_TEX, GLSMPrograms.glGetAttribLocation(program, "iris_CubeTex"));
         } finally {
-            GLStateManager.glDeleteProgram(program);
+            GLSMPrograms.glDeleteProgram(program);
         }
     }
 
@@ -49,21 +49,21 @@ class GlsmSdlAttribBindingTest {
     void immediateEntityIdsDoNotMoveOntoMcEntity() {
         final int program = linkWithIrisBindings(IMMEDIATE_VERTEX);
         try {
-            assertEquals(ImmediateExtendedAttribHandler.LOC_MC_ENTITY, GLStateManager.glGetAttribLocation(program, "mc_Entity"));
-            assertEquals(ImmediateExtendedAttribHandler.LOC_ENTITY_IDS, GLStateManager.glGetAttribLocation(program, "iris_Entity"));
+            assertEquals(ImmediateExtendedAttribHandler.LOC_MC_ENTITY, GLSMPrograms.glGetAttribLocation(program, "mc_Entity"));
+            assertEquals(ImmediateExtendedAttribHandler.LOC_ENTITY_IDS, GLSMPrograms.glGetAttribLocation(program, "iris_Entity"));
         } finally {
-            GLStateManager.glDeleteProgram(program);
+            GLSMPrograms.glDeleteProgram(program);
         }
     }
 
     /** Links a fixture program using Iris material attribute bindings. */
     private static int linkWithIrisBindings(String vertexSource) {
-        final int program = GLStateManager.glCreateProgram();
-        GLStateManager.glAttachShader(program, GlTestSupport.compile(GL20.GL_VERTEX_SHADER, vertexSource));
-        GLStateManager.glAttachShader(program, GlTestSupport.compile(GL20.GL_FRAGMENT_SHADER, GlTestSupport.TRIVIAL_FS));
-        GLStateManager.glBindAttribLocation(program, InstancedAttribs.LOC_ENTITY, "iris_InstEntity");
-        GLStateManager.glBindAttribLocation(program, ImmediateExtendedAttribHandler.LOC_MC_ENTITY, "mc_Entity");
-        GLStateManager.glLinkProgram(program);
+        final int program = GLSMPrograms.glCreateProgram();
+        GLSMPrograms.glAttachShader(program, GlTestSupport.compile(GL20.GL_VERTEX_SHADER, vertexSource));
+        GLSMPrograms.glAttachShader(program, GlTestSupport.compile(GL20.GL_FRAGMENT_SHADER, GlTestSupport.TRIVIAL_FS));
+        GLSMPrograms.glBindAttribLocation(program, InstancedAttribs.LOC_ENTITY, "iris_InstEntity");
+        GLSMPrograms.glBindAttribLocation(program, ImmediateExtendedAttribHandler.LOC_MC_ENTITY, "mc_Entity");
+        GLSMPrograms.glLinkProgram(program);
         return program;
     }
 }

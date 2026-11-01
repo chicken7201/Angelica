@@ -1,7 +1,7 @@
 package com.gtnewhorizons.angelica.client.font;
 
 import com.gtnewhorizons.angelica.glsm.GLCoreTest;
-import com.gtnewhorizons.angelica.glsm.GLStateManager;
+import com.gtnewhorizons.angelica.glsm.GLSMTextures;
 import com.gtnewhorizons.angelica.glsm.testutil.Reflect;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.DynamicTexture;
@@ -162,8 +162,8 @@ class UnicodeLoadingTextureGLTest {
                     "untransformed vanilla allocation must be the source of the fixture error");
                 assertEquals(GL11.GL_NO_ERROR, GL11.glGetError(), "no additional fixture errors are expected");
                 FontProviderUnicode.withPageTextureBindingPreserved(() -> {
-                    texture.glTextureId = GLStateManager.glGenTextures();
-                    GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, texture.glTextureId);
+                    texture.glTextureId = GLSMTextures.glGenTextures();
+                    GLSMTextures.glBindTexture(GL11.GL_TEXTURE_2D, texture.glTextureId);
                     final int[] pixels = texture.getTextureData();
                     final IntBuffer data = BufferUtils.createIntBuffer(pixels.length);
                     data.put(pixels).flip();

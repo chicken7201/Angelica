@@ -5,6 +5,7 @@ import com.gtnewhorizon.gtnhlib.client.renderer.vertex.VertexFormat;
 import com.gtnewhorizons.angelica.config.SystemProperties;
 import com.gtnewhorizons.angelica.glsm.CompatUniformManager;
 import com.gtnewhorizons.angelica.glsm.GLContextState;
+import com.gtnewhorizons.angelica.glsm.GLSMCurrentAttribs;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.hooks.DeferredBlendHandler;
 import com.gtnewhorizons.angelica.glsm.hooks.GLSMHooks;
@@ -133,7 +134,7 @@ public final class ShaderManager {
         lastBoundProgramId = -1;
         currentVertexKeyPacked = Long.MIN_VALUE;
         currentFKLen = 0;
-        GLStateManager.forceAttribDefaultsDirty();
+        GLSMCurrentAttribs.forceAttribDefaultsDirty();
     }
 
     /** Selects and binds the FFP program, including an unchanged variant invalidated by state replay. */
@@ -141,7 +142,7 @@ public final class ShaderManager {
         GLSMHooks.resolvePendingProgram();
         final DeferredBlendHandler bh = GLSMHooks.blendHandler;
         if (bh != null) bh.flushDeferredBlend();
-        GLStateManager.flushEntityIds(glCtx);
+        GLSMCurrentAttribs.flushEntityIds(glCtx);
 
         // Handle FFP & Iris uniforms
         final int currentProgramId = glCtx.activeProgram;
@@ -156,7 +157,7 @@ public final class ShaderManager {
         final boolean hasNormal =   (vertexFlags & VertexFlags.NORMAL_BIT) != 0;
         final boolean hasTexCoord = (vertexFlags & VertexFlags.TEXTURE_BIT) != 0;
         final boolean hasLightmap = (vertexFlags & VertexFlags.BRIGHTNESS_BIT) != 0;
-        GLStateManager.flushDeferredVertexAttribs(glCtx, hasColor, hasNormal, hasTexCoord, hasLightmap);
+        GLSMCurrentAttribs.flushDeferredVertexAttribs(glCtx, hasColor, hasNormal, hasTexCoord, hasLightmap);
 
         if (!active) return;
 
@@ -192,6 +193,10 @@ public final class ShaderManager {
             uniforms.upload(glCtx);
             currentProgram.uploadWeatherParams();
         }
+    }
+
+    boolean isTextureSupersampling() {
+        return currentProgram != null && currentProgram.getFragmentKey().textureSupersamplingSamples() > 1;
     }
 
     public static void endFrame() {

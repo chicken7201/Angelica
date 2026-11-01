@@ -17,9 +17,7 @@ public final class EntityIdsOnlyHandler implements ImmediateExtendedAttribHandle
     @Override public boolean wantsExtended() { return false; }
     /** Disables tangent generation in the material-ID-only test handler. */
     @Override public boolean wantsTangent() { return false; }
-    /** Reports whether the current shader consumes material ID attributes. */
-    @Override public boolean wantsEntityIds() { return GLStateManager.getActiveProgram() != 0; }
-    /** Disables extended attribute capture in the material-ID-only test handler. */
+    @Override public boolean wantsEntityIds() { return GLSMPrograms.getActiveProgram() != 0; }
     @Override public boolean wantsExtendedCapture() { return false; }
     /** Disables generated face normals in the material-ID-only test handler. */
     @Override public boolean wantsFaceNormals() { return false; }

@@ -1,6 +1,7 @@
 package net.coderbot.iris.uniforms;
 
-import com.gtnewhorizons.angelica.glsm.GLStateManager;
+import com.gtnewhorizons.angelica.glsm.GLSMAttribStack;
+import com.gtnewhorizons.angelica.glsm.GLSMDepthStencilAlpha;
 import com.gtnewhorizons.angelica.glsm.StateSet;
 import net.coderbot.iris.Iris;
 import net.coderbot.iris.pipeline.DeferredWorldRenderingPipeline;
@@ -26,10 +27,10 @@ public class ItemIdManager {
     /** Applies item alpha testing while preserving the caller's world or HUD lightmap state. */
     public static int beginCutout(ItemStack stack) {
         pushItemId();
-        final int depth = GLStateManager.pushState(StateSet.CUTOUT);
+        final int depth = GLSMAttribStack.pushState(StateSet.CUTOUT);
         try {
-            GLStateManager.enableAlphaTest();
-            GLStateManager.glAlphaFunc(GL11.GL_GREATER, 0.1F);
+            GLSMDepthStencilAlpha.enableAlphaTest();
+            GLSMDepthStencilAlpha.glAlphaFunc(GL11.GL_GREATER, 0.1F);
             setItemId(stack);
         } catch (Throwable t) {
             endCutout(depth);
@@ -41,7 +42,7 @@ public class ItemIdManager {
     /** Restores the item identity and GL state at the saved cutout depth. */
     public static void endCutout(int depth) {
         popItemId();
-        GLStateManager.popStateTo(depth);
+        GLSMAttribStack.popStateTo(depth);
     }
 
     /**

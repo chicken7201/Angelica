@@ -6,6 +6,7 @@ import static com.gtnewhorizon.gtnhlib.bytebuf.MemoryUtilities.memPutInt;
 import static com.gtnewhorizon.gtnhlib.bytebuf.MemoryUtilities.memFree;
 
 import com.gtnewhorizons.angelica.config.FontConfig;
+import com.gtnewhorizons.angelica.glsm.GLSMTextures;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import jss.util.RandomXoshiro256StarStar;
 import org.apache.logging.log4j.LogManager;
@@ -81,7 +82,7 @@ public final class FontProviderCustom implements FontProvider {
             if (this.atlasTextures[i] != 0) {
                 if (LoadingFontDiagnostics.ENABLED) LoadingFontDiagnostics.event("CUSTOM_TEXTURE_DELETE",
                     "provider=" + LoadingFontDiagnostics.identity(this) + " atlas=" + i + " texture=" + this.atlasTextures[i]);
-                GLStateManager.glDeleteTextures(this.atlasTextures[i]);
+                GLSMTextures.glDeleteTextures(this.atlasTextures[i]);
                 this.atlasTextures[i] = 0;
                 deleted++;
             }
@@ -89,6 +90,7 @@ public final class FontProviderCustom implements FontProvider {
         if (LoadingFontDiagnostics.ENABLED) LoadingFontDiagnostics.event("CUSTOM_PROVIDER_RESET",
             "provider=" + LoadingFontDiagnostics.identity(this) + " oldFont=" + previous + " newFont=" + font
                 + " deletedTextures=" + deleted);
+        FontProviderCache.invalidate();
     }
 
     /** Reloads a selected font at the configured raster quality. */
@@ -329,12 +331,12 @@ public final class FontProviderCustom implements FontProvider {
     /** Preserves texture binding and releases native staging memory after upload. */
     static int uploadAtlas(BufferedImage image) {
         return FontProviderUnicode.withPageTextureBindingPreserved(() -> {
-            int id = GLStateManager.glGenTextures();
-            GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, id);
-            GLStateManager.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
-            GLStateManager.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
-            GLStateManager.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL11.GL_REPEAT);
-            GLStateManager.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL11.GL_REPEAT);
+            int id = GLSMTextures.glGenTextures();
+            GLSMTextures.glBindTexture(GL11.GL_TEXTURE_2D, id);
+            GLSMTextures.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+            GLSMTextures.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+            GLSMTextures.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL11.GL_REPEAT);
+            GLSMTextures.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL11.GL_REPEAT);
 
             final int width = image.getWidth();
             final int height = image.getHeight();
@@ -365,7 +367,7 @@ public final class FontProviderCustom implements FontProvider {
                     pixelBuffer.limit(image.getHeight() * image.getWidth());
                 }
 
-                GLStateManager.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGBA, image.getWidth(), image.getHeight(), 0, GL12.GL_BGRA, GL12.GL_UNSIGNED_INT_8_8_8_8_REV, pixelBuffer);
+                GLSMTextures.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGBA, image.getWidth(), image.getHeight(), 0, GL12.GL_BGRA, GL12.GL_UNSIGNED_INT_8_8_8_8_REV, pixelBuffer);
                 return id;
             } finally {
                 memFree(pixelBuffer);

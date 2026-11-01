@@ -2,6 +2,8 @@ package com.gtnewhorizons.angelica.mixins.early.angelica;
 
 import com.gtnewhorizons.angelica.AngelicaMod;
 import com.gtnewhorizons.angelica.client.font.BatchingFontRenderer;
+import com.gtnewhorizons.angelica.config.AngelicaConfig;
+import com.gtnewhorizons.angelica.debug.DebugKeyHandler;
 import com.gtnewhorizons.angelica.glsm.ffp.ShaderManager;
 import com.gtnewhorizons.angelica.glsm.profiling.Tracy;
 import com.gtnewhorizons.angelica.glsm.streaming.TessellatorStreamingDrawer;
@@ -18,6 +20,7 @@ import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.client.settings.GameSettings;
 import org.embeddedt.embeddium.impl.render.frame.RenderAheadManager;
 import org.lwjgl.input.Keyboard;
+import com.gtnewhorizons.angelica.glsm.GLSMEnable;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import org.lwjgl.opengl.GL11;
 import org.objectweb.asm.Opcodes;
@@ -53,7 +56,7 @@ public abstract class MixinMinecraft {
         at = @At(value = "INVOKE", target = "Lcpw/mods/fml/common/FMLCommonHandler;onRenderTickEnd(F)V", shift = At.Shift.AFTER, remap = false)
     )
     private void angelica$injectLightingFixPostRenderTick(CallbackInfo ci) {
-        GLStateManager.glEnable(GL11.GL_LIGHTING);
+        GLSMEnable.glEnable(GL11.GL_LIGHTING);
     }
 
     @Unique
@@ -110,7 +113,18 @@ public abstract class MixinMinecraft {
 
     @Inject(method = "runTick", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/gui/GuiScreen;isShiftKeyDown()Z", shift = At.Shift.AFTER))
     private void angelica$setShowFpsGraph(CallbackInfo ci) {
+        if (AngelicaConfig.modernizeF3Screen && DebugKeyHandler.F3_TOGGLE.isArmed()) return;
         ((IGameSettingsExt) gameSettings).angelica$setShowFpsGraph(Keyboard.isKeyDown(Keyboard.KEY_LMENU) || Keyboard.isKeyDown(Keyboard.KEY_RMENU));
+    }
+
+    @Inject(method = "func_152348_aa", at = @At("HEAD"), cancellable = true, require = 1)
+    private void angelica$disableStreamKeys(CallbackInfo ci) {
+        if (!Keyboard.getEventKeyState() || !Keyboard.isKeyDown(Keyboard.KEY_F3)) return;
+        final int key = Keyboard.getEventKey();
+        if (key == gameSettings.field_152396_an.getKeyCode() || key == gameSettings.field_152397_ao.getKeyCode()
+            || key == gameSettings.field_152398_ap.getKeyCode() || key == gameSettings.field_152399_aq.getKeyCode()) {
+            ci.cancel();
+        }
     }
 
     /** Updates streaming buffer end frame state for MixinMinecraft. */

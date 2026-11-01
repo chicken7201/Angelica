@@ -1,6 +1,8 @@
 package com.gtnewhorizons.angelica.client.font;
 
 import com.gtnewhorizons.angelica.config.FontConfig;
+import com.gtnewhorizons.angelica.glsm.GLSMQueries;
+import com.gtnewhorizons.angelica.glsm.GLSMTextures;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.backend.BackendManager;
 import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
@@ -147,6 +149,20 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
         return location;
     }
 
+    /** Installs the live resource manager when the provider was touched before its first reload. */
+    private boolean initializeFromMinecraft() {
+        final Minecraft minecraft = Minecraft.getMinecraft();
+        if (minecraft == null) {
+            return false;
+        }
+        final IResourceManager manager = minecraft.getResourceManager();
+        if (manager == null) {
+            return false;
+        }
+        onResourceManagerReload(manager);
+        return true;
+    }
+
     /** Returns a current-generation page, composing it once on the CPU when absent. */
     private LoadedPage getPage(char chr) {
         if (Character.isSurrogate(chr)) {
@@ -178,7 +194,10 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
                     manager = this.resourceManager;
                 }
                 if (manager == null) {
-                    throw new IllegalStateException("Unicode font resources have not been initialized");
+                    if (!initializeFromMinecraft()) {
+                        throw new IllegalStateException("Unicode font resources have not been initialized");
+                    }
+                    continue;
                 }
 
                 LOGGER.debug(
@@ -371,7 +390,13 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
                 page.generation,
                 Thread.currentThread().getName());
             if (page.dynamicTexture == null) {
-                page.dynamicTexture = withPageTextureBindingPreserved(() -> new DynamicTexture(page.image));
+                try {
+                    page.dynamicTexture = withPageTextureBindingPreserved(() -> new DynamicTexture(page.image));
+                } catch (RuntimeException | LinkageError failure) {
+                    LOGGER.debug("Unicode page texture allocation failed for page {}; rendering advances without it", pageLabel(page.pageIndex), failure);
+                    while (GLSMQueries.glGetError() != org.lwjgl.opengl.GL11.GL_NO_ERROR) {}
+                    return null;
+                }
             }
             page.texture = textureManager.getDynamicTextureLocation(
                 String.format("angelica_unicode_page_%02x_g%d", page.pageIndex, page.generation),
@@ -461,13 +486,13 @@ public final class FontProviderUnicode implements FontProvider, IResourceManager
 
     /** Keeps a lazy Unicode page upload from replacing the texture bound by the caller before font state is saved. */
     static <T> T withPageTextureBindingPreserved(Supplier<T> upload) {
-        final int activeUnit = GLStateManager.getActiveTextureUnitForServerState();
-        final int previousTexture = GLStateManager.getBoundTextureForServerState();
+        final int activeUnit = GLSMTextures.getActiveTextureUnitForServerState();
+        final int previousTexture = GLSMTextures.getBoundTextureForServerState();
         try {
             return upload.get();
         } finally {
-            GLStateManager.glActiveTexture(GL13.GL_TEXTURE0 + activeUnit);
-            GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, previousTexture);
+            GLSMTextures.glActiveTexture(GL13.GL_TEXTURE0 + activeUnit);
+            GLSMTextures.glBindTexture(GL11.GL_TEXTURE_2D, previousTexture);
         }
     }
 

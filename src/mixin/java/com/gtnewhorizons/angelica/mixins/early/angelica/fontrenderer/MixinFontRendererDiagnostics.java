@@ -1,7 +1,7 @@
 package com.gtnewhorizons.angelica.mixins.early.angelica.fontrenderer;
 
 import com.gtnewhorizons.angelica.client.font.LoadingFontDiagnostics;
-import com.gtnewhorizons.angelica.glsm.GLStateManager;
+import com.gtnewhorizons.angelica.glsm.GLSMDraws;
 import net.minecraft.client.gui.FontRenderer;
 import net.minecraft.client.renderer.texture.TextureManager;
 import net.minecraft.client.resources.IResourceManager;
@@ -28,7 +28,7 @@ public abstract class MixinFontRendererDiagnostics {
     private void angelica$loadingFontRoute(String text, int x, int y, int color, boolean shadow,
         CallbackInfoReturnable<Integer> cir) {
         if (!Thread.currentThread().getName().equals("BLS Splash renderer")) return;
-        final int listMode = GLStateManager.getListMode();
+        final int listMode = GLSMDraws.getListMode();
         if (listMode == angelica$lastLoadingListMode) return;
         angelica$lastLoadingListMode = listMode;
         LoadingFontDiagnostics.event("BLS_RENDER_ROUTE", "renderer=" + LoadingFontDiagnostics.identity(this)

@@ -2,6 +2,11 @@ package com.gtnewhorizons.angelica.client.font;
 
 import com.gtnewhorizons.angelica.glsm.DisplayListManager;
 import com.gtnewhorizons.angelica.glsm.GLCoreTest;
+import com.gtnewhorizons.angelica.glsm.GLSMAttribStack;
+import com.gtnewhorizons.angelica.glsm.GLSMDepthStencilAlpha;
+import com.gtnewhorizons.angelica.glsm.GLSMDraws;
+import com.gtnewhorizons.angelica.glsm.GLSMEnable;
+import com.gtnewhorizons.angelica.glsm.GLSMRasterizer;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.StateSet;
 import org.junit.jupiter.api.AfterEach;
@@ -22,40 +27,40 @@ class FontRenderStateGLTest {
     @ParameterizedTest
     @CsvSource({"false, false", "false, true", "true, false", "true, true"})
     void displayListReplaysCapturedStateAndRestoresCaller(boolean pipeline, boolean execute) {
-        GLStateManager.enableDepthTest();
-        GLStateManager.glDepthFunc(GL11.GL_LEQUAL);
-        GLStateManager.glDepthMask(true);
-        GLStateManager.glPolygonOffset(-10.0f, -10.0f);
-        GLStateManager.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
+        GLSMDepthStencilAlpha.enableDepthTest();
+        GLSMDepthStencilAlpha.glDepthFunc(GL11.GL_LEQUAL);
+        GLSMDepthStencilAlpha.glDepthMask(true);
+        GLSMRasterizer.glPolygonOffset(-10.0f, -10.0f);
+        GLSMEnable.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
         final TextDrawState captured = new TextDrawState();
-        captured.captureLive();
+        captured.captureLive(GLStateManager.ctx());
         final TextDrawState replayed = new TextDrawState();
-        final int initialDepth = GLStateManager.getAttribDepth();
-        final int list = GLStateManager.glGenLists(1);
+        final int initialDepth = GLSMAttribStack.getAttribDepth();
+        final int list = GLSMDraws.glGenLists(1);
         try {
-            GLStateManager.glNewList(list, execute ? GL11.GL_COMPILE_AND_EXECUTE : GL11.GL_COMPILE);
-            final int depth = GLStateManager.pushState(pipeline ? StateSet.FONT_PIPELINE : StateSet.FONT);
+            GLSMDraws.glNewList(list, execute ? GL11.GL_COMPILE_AND_EXECUTE : GL11.GL_COMPILE);
+            final int depth = GLSMAttribStack.pushState(pipeline ? StateSet.FONT_PIPELINE : StateSet.FONT);
             captured.apply();
-            DisplayListManager.recordComplexCommand(replayed::captureLive);
-            GLStateManager.popStateTo(depth);
-            GLStateManager.glEndList();
-            assertEquals(initialDepth, GLStateManager.getAttribDepth(), "balanced compilation scope");
+            DisplayListManager.recordComplexCommand(() -> replayed.captureLive(GLStateManager.ctx()));
+            GLSMAttribStack.popStateTo(depth);
+            GLSMDraws.glEndList();
+            assertEquals(initialDepth, GLSMAttribStack.getAttribDepth(), "balanced compilation scope");
 
-            GLStateManager.disableDepthTest();
-            GLStateManager.glDepthFunc(GL11.GL_ALWAYS);
-            GLStateManager.glDepthMask(false);
-            GLStateManager.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
-            GLStateManager.glPolygonOffset(1.0f, 2.0f);
+            GLSMDepthStencilAlpha.disableDepthTest();
+            GLSMDepthStencilAlpha.glDepthFunc(GL11.GL_ALWAYS);
+            GLSMDepthStencilAlpha.glDepthMask(false);
+            GLSMEnable.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
+            GLSMRasterizer.glPolygonOffset(1.0f, 2.0f);
             final TextDrawState caller = new TextDrawState();
-            caller.captureLive();
+            caller.captureLive(GLStateManager.ctx());
 
             for (int replay = 0; replay < 2; replay++) {
-                GLStateManager.glCallList(list);
+                GLSMDraws.glCallList(list);
                 assertTrue(captured.sameAs(replayed), "compiled segment raster state");
                 final TextDrawState restored = new TextDrawState();
-                restored.captureLive();
+                restored.captureLive(GLStateManager.ctx());
                 assertTrue(caller.sameAs(restored), "caller state after list replay");
-                assertEquals(initialDepth, GLStateManager.getAttribDepth(), "balanced replay scope");
+                assertEquals(initialDepth, GLSMAttribStack.getAttribDepth(), "balanced replay scope");
                 assertFalse(GL11.glIsEnabled(GL11.GL_DEPTH_TEST), "driver depth test");
                 assertEquals(GL11.GL_ALWAYS, GL11.glGetInteger(GL11.GL_DEPTH_FUNC), "driver depth function");
                 assertFalse(GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK), "driver depth write mask");
@@ -65,8 +70,8 @@ class FontRenderStateGLTest {
             }
         } finally {
             DisplayListManager.abortCompilation();
-            GLStateManager.popStateTo(initialDepth);
-            GLStateManager.glDeleteLists(list, 1);
+            GLSMAttribStack.popStateTo(initialDepth);
+            GLSMDraws.glDeleteLists(list, 1);
         }
     }
 
@@ -74,45 +79,45 @@ class FontRenderStateGLTest {
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void fontScopeRestoresRasterStateAfterSegmentReplay(boolean pipeline) {
-        GLStateManager.enableDepthTest();
-        GLStateManager.glDepthFunc(GL11.GL_LEQUAL);
-        GLStateManager.glDepthMask(true);
-        GLStateManager.glPolygonOffset(-10.0f, -10.0f);
-        GLStateManager.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
+        GLSMDepthStencilAlpha.enableDepthTest();
+        GLSMDepthStencilAlpha.glDepthFunc(GL11.GL_LEQUAL);
+        GLSMDepthStencilAlpha.glDepthMask(true);
+        GLSMRasterizer.glPolygonOffset(-10.0f, -10.0f);
+        GLSMEnable.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
         final TextDrawState first = new TextDrawState();
-        first.captureLive();
+        first.captureLive(GLStateManager.ctx());
 
-        GLStateManager.glDepthFunc(GL11.GL_GREATER);
-        GLStateManager.glPolygonOffset(-2.0f, -3.0f);
+        GLSMDepthStencilAlpha.glDepthFunc(GL11.GL_GREATER);
+        GLSMRasterizer.glPolygonOffset(-2.0f, -3.0f);
         final TextDrawState second = new TextDrawState();
-        second.captureLive();
+        second.captureLive(GLStateManager.ctx());
 
-        GLStateManager.disableDepthTest();
-        GLStateManager.glDepthFunc(GL11.GL_ALWAYS);
-        GLStateManager.glDepthMask(false);
-        GLStateManager.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
-        GLStateManager.glPolygonOffset(1.0f, 2.0f);
+        GLSMDepthStencilAlpha.disableDepthTest();
+        GLSMDepthStencilAlpha.glDepthFunc(GL11.GL_ALWAYS);
+        GLSMDepthStencilAlpha.glDepthMask(false);
+        GLSMEnable.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
+        GLSMRasterizer.glPolygonOffset(1.0f, 2.0f);
         final TextDrawState caller = new TextDrawState();
-        caller.captureLive();
+        caller.captureLive(GLStateManager.ctx());
 
-        final int depth = GLStateManager.pushState(pipeline ? StateSet.FONT_PIPELINE : StateSet.FONT);
+        final int depth = GLSMAttribStack.pushState(pipeline ? StateSet.FONT_PIPELINE : StateSet.FONT);
         try {
             first.apply();
             final TextDrawState replayed = new TextDrawState();
-            replayed.captureLive();
+            replayed.captureLive(GLStateManager.ctx());
             assertTrue(first.sameAs(replayed), "first segment raster state");
             second.apply();
-            replayed.captureLive();
+            replayed.captureLive(GLStateManager.ctx());
             assertTrue(second.sameAs(replayed), "second segment raster state");
         } finally {
-            GLStateManager.popStateTo(depth);
+            GLSMAttribStack.popStateTo(depth);
         }
 
         final TextDrawState restored = new TextDrawState();
-        restored.captureLive();
+        restored.captureLive(GLStateManager.ctx());
         assertTrue(caller.sameAs(restored), "caller raster state after scope exit");
-        assertFalse(GLStateManager.getDepthTest().isEffectivelyEnabled(), "caller depth test");
-        assertFalse(GLStateManager.getPolygonOffsetFillState().isEffectivelyEnabled(), "caller polygon offset");
+        assertFalse(GLStateManager.ctx().depthTest.isEffectivelyEnabled(), "caller depth test");
+        assertFalse(GLStateManager.ctx().polygonOffsetFillState.isEffectivelyEnabled(), "caller polygon offset");
         assertFalse(GL11.glIsEnabled(GL11.GL_DEPTH_TEST), "driver depth test");
         assertEquals(GL11.GL_ALWAYS, GL11.glGetInteger(GL11.GL_DEPTH_FUNC), "driver depth function");
         assertFalse(GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK), "driver depth write mask");
@@ -124,38 +129,38 @@ class FontRenderStateGLTest {
     /** Restores conventional world raster state after each replay test. */
     @AfterEach
     void restoreWorldState() {
-        GLStateManager.enableDepthTest();
-        GLStateManager.glDepthFunc(GL11.GL_LEQUAL);
-        GLStateManager.glDepthMask(true);
-        GLStateManager.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
-        GLStateManager.glPolygonOffset(0.0f, 0.0f);
+        GLSMDepthStencilAlpha.enableDepthTest();
+        GLSMDepthStencilAlpha.glDepthFunc(GL11.GL_LEQUAL);
+        GLSMDepthStencilAlpha.glDepthMask(true);
+        GLSMEnable.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
+        GLSMRasterizer.glPolygonOffset(0.0f, 0.0f);
     }
 
     /** Verifies deferred text replays its captured depth and polygon-offset semantics. */
     @Test
     void capturedStateSurvivesAChangedFlushContext() {
-        GLStateManager.enableDepthTest();
-        GLStateManager.glDepthFunc(GL11.GL_LEQUAL);
-        GLStateManager.glDepthMask(true);
-        GLStateManager.glPolygonOffset(-10.0f, -10.0f);
-        GLStateManager.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
+        GLSMDepthStencilAlpha.enableDepthTest();
+        GLSMDepthStencilAlpha.glDepthFunc(GL11.GL_LEQUAL);
+        GLSMDepthStencilAlpha.glDepthMask(true);
+        GLSMRasterizer.glPolygonOffset(-10.0f, -10.0f);
+        GLSMEnable.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
 
         final TextDrawState captured = new TextDrawState();
-        captured.captureLive();
+        captured.captureLive(GLStateManager.ctx());
 
-        GLStateManager.disableDepthTest();
-        GLStateManager.glDepthFunc(GL11.GL_ALWAYS);
-        GLStateManager.glDepthMask(false);
-        GLStateManager.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
-        GLStateManager.glPolygonOffset(1.0f, 1.0f);
+        GLSMDepthStencilAlpha.disableDepthTest();
+        GLSMDepthStencilAlpha.glDepthFunc(GL11.GL_ALWAYS);
+        GLSMDepthStencilAlpha.glDepthMask(false);
+        GLSMEnable.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
+        GLSMRasterizer.glPolygonOffset(1.0f, 1.0f);
 
         captured.apply();
 
-        assertTrue(GLStateManager.getDepthTest().isEffectivelyEnabled(), "depth test");
-        assertEquals(GL11.GL_LEQUAL, GLStateManager.getDepthState().getFunc(), "depth function");
-        assertTrue(GLStateManager.isEffectiveDepthMaskEnabled(), "depth write mask");
-        assertTrue(GLStateManager.getPolygonOffsetFillState().isEffectivelyEnabled(), "polygon offset fill");
-        assertEquals(-10.0f, GLStateManager.getPolygonState().getOffsetFactor(), "polygon offset factor");
-        assertEquals(-10.0f, GLStateManager.getPolygonState().getOffsetUnits(), "polygon offset units");
+        assertTrue(GLStateManager.ctx().depthTest.isEffectivelyEnabled(), "depth test");
+        assertEquals(GL11.GL_LEQUAL, GLStateManager.ctx().depthState.getFunc(), "depth function");
+        assertTrue(GLSMDepthStencilAlpha.isEffectiveDepthMaskEnabled(), "depth write mask");
+        assertTrue(GLStateManager.ctx().polygonOffsetFillState.isEffectivelyEnabled(), "polygon offset fill");
+        assertEquals(-10.0f, GLStateManager.ctx().polygonState.getOffsetFactor(), "polygon offset factor");
+        assertEquals(-10.0f, GLStateManager.ctx().polygonState.getOffsetUnits(), "polygon offset units");
     }
 }

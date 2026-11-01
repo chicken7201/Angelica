@@ -1,6 +1,8 @@
 package com.gtnewhorizons.angelica.client.font;
 
 import com.gtnewhorizons.angelica.config.FontConfig;
+import com.gtnewhorizons.angelica.glsm.GLSMBlend;
+import com.gtnewhorizons.angelica.glsm.GLSMTextures;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.backend.BackendManager;
 import com.gtnewhorizons.angelica.glsm.backend.RenderBackend;
@@ -85,9 +87,9 @@ public final class LoadingFontDiagnostics {
             + " splashComplete=" + GLStateManager.isSplashComplete()
             + " caching=" + GLStateManager.isCachingEnabled()
             + " activeActual=" + (backend.getInteger(GL13.GL_ACTIVE_TEXTURE) - GL13.GL_TEXTURE0)
-            + " activeCached=" + GLStateManager.getActiveTextureUnit()
+            + " activeCached=" + GLSMTextures.getActiveTextureUnit()
             + " boundActual=" + backend.getInteger(GL11.GL_TEXTURE_BINDING_2D)
-            + " boundCached=" + GLStateManager.getBoundTextureForServerState()
+            + " boundCached=" + GLSMTextures.getBoundTextureForServerState()
             + " program=" + backend.getInteger(GL20.GL_CURRENT_PROGRAM)
             + " vao=" + backend.getInteger(GL30.GL_VERTEX_ARRAY_BINDING)
             + " fontVao=" + GLStateManager.ctx().fontVao;
@@ -128,16 +130,16 @@ public final class LoadingFontDiagnostics {
             if (sample) {
                 nextSample = now + 1_000_000_000L;
                 final Minecraft mc = Minecraft.getMinecraft();
-                GLStateManager.getEffectiveColorMask(colorMask);
+                GLSMBlend.getEffectiveColorMask(colorMask);
                 final String state = "renderer=" + identity(renderer) + " batcher=" + identity(owner)
                     + " mcFont=" + identity(mc.fontRenderer) + " mcTextures=" + identity(mc.getTextureManager())
                     + " unicode=" + unicode + " custom=" + FontConfig.enableCustomFont
                     + " isSplash=" + owner.isSplash + " aa=" + FontConfig.fontAAMode
                     + " brightness=" + FontConfig.fontBrightness + " shader=" + shader
                     + " reload=" + RELOAD.get() + ' ' + glState()
-                    + " depth=" + GLStateManager.getDepthTest().isEffectivelyEnabled()
-                    + " cull=" + GLStateManager.getCullState().isEffectivelyEnabled()
-                    + " alphaRef=" + GLStateManager.getAlphaState().getReference()
+                    + " depth=" + GLStateManager.ctx().depthTest.isEffectivelyEnabled()
+                    + " cull=" + GLStateManager.ctx().cullState.isEffectivelyEnabled()
+                    + " alphaRef=" + GLStateManager.ctx().alphaState.getReference()
                     + " colorMask=" + colorMask.red + ',' + colorMask.green + ',' + colorMask.blue + ',' + colorMask.alpha;
                 if (!state.equals(lastState)) {
                     lastState = state;

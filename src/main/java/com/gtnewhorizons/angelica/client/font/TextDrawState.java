@@ -1,6 +1,10 @@
 package com.gtnewhorizons.angelica.client.font;
 
-import com.gtnewhorizons.angelica.glsm.GLStateManager;
+import com.gtnewhorizons.angelica.glsm.GLContextState;
+import com.gtnewhorizons.angelica.glsm.GLSMBlend;
+import com.gtnewhorizons.angelica.glsm.GLSMDepthStencilAlpha;
+import com.gtnewhorizons.angelica.glsm.GLSMEnable;
+import com.gtnewhorizons.angelica.glsm.GLSMRasterizer;
 import com.gtnewhorizons.angelica.glsm.states.ColorMask;
 import com.gtnewhorizons.angelica.glsm.states.PolygonState;
 import org.lwjgl.opengl.GL11;
@@ -30,24 +34,24 @@ final class TextDrawState {
     float alphaRef;
 
     /** Captures effective caller state, including locked depth and polygon clamps. */
-    void captureLive() {
-        depthTest = GLStateManager.getDepthTest().isEffectivelyEnabled();
-        depthFunc = GLStateManager.getDepthState().getFunc();
-        depthMask = GLStateManager.isEffectiveDepthMaskEnabled();
-        final ColorMask colorMask = GLStateManager.getEffectiveColorMask(colorMaskScratch);
+    void captureLive(GLContextState ctx) {
+        depthTest = ctx.depthTest.isEffectivelyEnabled();
+        depthFunc = ctx.depthState.getFunc();
+        depthMask = ctx.depthState.isEffectiveMaskEnabled();
+        final ColorMask colorMask = ctx.colorMask.readEffective(colorMaskScratch);
         colorRed = colorMask.red;
         colorGreen = colorMask.green;
         colorBlue = colorMask.blue;
         colorAlpha = colorMask.alpha;
-        final PolygonState polygon = GLStateManager.getPolygonState();
-        cull = GLStateManager.getCullState().isEffectivelyEnabled();
+        final PolygonState polygon = ctx.polygonState;
+        cull = ctx.cullState.isEffectivelyEnabled();
         cullFace = polygon.getCullFaceMode();
         frontFace = polygon.getFrontFace();
-        polygonOffset = GLStateManager.getPolygonOffsetFillState().isEffectivelyEnabled();
+        polygonOffset = ctx.polygonOffsetFillState.isEffectivelyEnabled();
         offsetFactor = polygon.getOffsetFactor();
         offsetUnits = polygon.getOffsetUnits();
         offsetClamp = polygon.getOffsetClamp();
-        alphaRef = GLStateManager.getAlphaState().getReference();
+        alphaRef = ctx.alphaState.getReference();
     }
 
     /** Checks whether segments can share one raster-state replay. */
@@ -90,14 +94,14 @@ final class TextDrawState {
 
     /** Replays captured state through GLSM, including display-list compilation. */
     void apply() {
-        if (depthTest) GLStateManager.enableDepthTest(); else GLStateManager.disableDepthTest();
-        GLStateManager.glDepthFunc(depthFunc);
-        GLStateManager.glDepthMask(depthMask);
-        GLStateManager.glColorMask(colorRed, colorGreen, colorBlue, colorAlpha);
-        if (cull) GLStateManager.enableCull(); else GLStateManager.disableCull();
-        GLStateManager.glCullFace(cullFace);
-        GLStateManager.glFrontFace(frontFace);
-        if (polygonOffset) GLStateManager.glEnable(GL11.GL_POLYGON_OFFSET_FILL); else GLStateManager.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
-        GLStateManager.glPolygonOffsetClamp(offsetFactor, offsetUnits, offsetClamp);
+        if (depthTest) GLSMDepthStencilAlpha.enableDepthTest(); else GLSMDepthStencilAlpha.disableDepthTest();
+        GLSMDepthStencilAlpha.glDepthFunc(depthFunc);
+        GLSMDepthStencilAlpha.glDepthMask(depthMask);
+        GLSMBlend.glColorMask(colorRed, colorGreen, colorBlue, colorAlpha);
+        if (cull) GLSMRasterizer.enableCull(); else GLSMRasterizer.disableCull();
+        GLSMRasterizer.glCullFace(cullFace);
+        GLSMRasterizer.glFrontFace(frontFace);
+        if (polygonOffset) GLSMEnable.glEnable(GL11.GL_POLYGON_OFFSET_FILL); else GLSMEnable.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
+        GLSMRasterizer.glPolygonOffsetClamp(offsetFactor, offsetUnits, offsetClamp);
     }
 }

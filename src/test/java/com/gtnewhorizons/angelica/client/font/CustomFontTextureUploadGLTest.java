@@ -1,7 +1,7 @@
 package com.gtnewhorizons.angelica.client.font;
 
 import com.gtnewhorizons.angelica.glsm.GLCoreTest;
-import com.gtnewhorizons.angelica.glsm.GLStateManager;
+import com.gtnewhorizons.angelica.glsm.GLSMTextures;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.lwjgl.opengl.GL11;
@@ -22,19 +22,19 @@ class CustomFontTextureUploadGLTest {
         final BufferedImage atlas = new BufferedImage(2, 2, imageType);
         final int[] pixels = {0xFFFF0000, 0x8000FF00, 0x400000FF, 0xFFFFFFFF};
         atlas.setRGB(0, 0, 2, 2, pixels, 0, 2);
-        final int initialUnit = GLStateManager.getActiveTextureUnitForServerState();
-        final int initialBinding = GLStateManager.getBoundTextureForServerState();
-        GLStateManager.glActiveTexture(GL13.GL_TEXTURE0 + unit);
-        final int previousBinding = GLStateManager.getBoundTextureForServerState();
-        final int callerTexture = GLStateManager.glGenTextures();
+        final int initialUnit = GLSMTextures.getActiveTextureUnitForServerState();
+        final int initialBinding = GLSMTextures.getBoundTextureForServerState();
+        GLSMTextures.glActiveTexture(GL13.GL_TEXTURE0 + unit);
+        final int previousBinding = GLSMTextures.getBoundTextureForServerState();
+        final int callerTexture = GLSMTextures.glGenTextures();
         int uploadedTexture = 0;
         try {
-            GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, callerTexture);
+            GLSMTextures.glBindTexture(GL11.GL_TEXTURE_2D, callerTexture);
             uploadedTexture = FontProviderCustom.uploadAtlas(atlas);
 
-            assertEquals(unit, GLStateManager.getActiveTextureUnitForServerState());
+            assertEquals(unit, GLSMTextures.getActiveTextureUnitForServerState());
             assertEquals(callerTexture, GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D));
-            GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, uploadedTexture);
+            GLSMTextures.glBindTexture(GL11.GL_TEXTURE_2D, uploadedTexture);
             assertEquals(2, GL11.glGetTexLevelParameteri(GL11.GL_TEXTURE_2D, 0, GL11.GL_TEXTURE_WIDTH));
             final ByteBuffer readback = ByteBuffer.allocateDirect(16);
             GL11.glGetTexImage(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, readback);
@@ -46,11 +46,11 @@ class CustomFontTextureUploadGLTest {
             }
             assertEquals(GL11.GL_NO_ERROR, GL11.glGetError());
         } finally {
-            GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, previousBinding);
-            GLStateManager.glActiveTexture(GL13.GL_TEXTURE0 + initialUnit);
-            GLStateManager.glBindTexture(GL11.GL_TEXTURE_2D, initialBinding);
-            GLStateManager.glDeleteTextures(callerTexture);
-            if (uploadedTexture != 0) GLStateManager.glDeleteTextures(uploadedTexture);
+            GLSMTextures.glBindTexture(GL11.GL_TEXTURE_2D, previousBinding);
+            GLSMTextures.glActiveTexture(GL13.GL_TEXTURE0 + initialUnit);
+            GLSMTextures.glBindTexture(GL11.GL_TEXTURE_2D, initialBinding);
+            GLSMTextures.glDeleteTextures(callerTexture);
+            if (uploadedTexture != 0) GLSMTextures.glDeleteTextures(uploadedTexture);
         }
     }
 }

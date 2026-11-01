@@ -2,6 +2,7 @@ package com.gtnewhorizons.angelica.glsm.backend;
 
 import com.gtnewhorizon.gtnhlib.bytebuf.MemoryUtilities;
 import com.gtnewhorizons.angelica.glsm.GLESFormatRemap;
+import com.gtnewhorizons.angelica.glsm.GLSMAttribStack;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
 import com.gtnewhorizons.angelica.glsm.RenderSystem;
 import com.gtnewhorizons.angelica.glsm.texture.TextureStaging;
@@ -25,6 +26,8 @@ import java.util.function.Predicate;
  * Abstract rendering backend.
  */
 public abstract class RenderBackend {
+
+    public static final int MAX_FRAMES_IN_FLIGHT = 3;
 
     public void onPostWindowCreate(long window) {}
 
@@ -248,7 +251,7 @@ public abstract class RenderBackend {
 
     public void onFrameBegin() {
         if (GLStateManager.takeStateSeedPending()) {
-            GLStateManager.replayStateToBackend();
+            GLSMAttribStack.replayStateToBackend();
         }
     }
 
