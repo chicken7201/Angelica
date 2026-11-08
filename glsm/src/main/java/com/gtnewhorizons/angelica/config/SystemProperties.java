@@ -21,6 +21,7 @@ public final class SystemProperties {
     public static final String GL_PROFILE = System.getProperty("angelica.glProfile", "");
     public static final boolean DISABLE_NVIDIA_WORKAROUND = Boolean.getBoolean("angelica.disableNvidiaWorkaround");
     public static final boolean DISABLE_LTW_WORKAROUND = Boolean.getBoolean("angelica.disableLtwWorkaround");
+    public static final boolean EMULATE_CLIP_DISTANCES = Boolean.getBoolean("angelica.emulateClipDistances");
 
     // Redirector
     public static final UnmappedGLMode UNMAPPED_GL = parseEnum("angelica.unmappedGL", UnmappedGLMode.WARN, UnmappedGLMode.WARN, UnmappedGLMode.class);
@@ -45,6 +46,8 @@ public final class SystemProperties {
     public static final Boolean TRACY_FINE_ZONES_OVERRIDE = parseBooleanOverride("angelica.tracy.fineZones");
     public static final String TRACY_DIR = System.getProperty("angelica.tracy.dir", "angelica" + File.separator + "natives" + File.separator + "tracy");
     public static final Integer TRACY_MAX_SRC_LOCS_OVERRIDE = Integer.getInteger("angelica.tracy.maxSrcLocs");
+    public static final Boolean TRACY_FRAME_IMAGES_OVERRIDE = parseBooleanOverride("angelica.tracy.frameImages");
+    public static final Integer TRACY_FRAME_IMAGE_RATE_OVERRIDE = Integer.getInteger("angelica.tracy.frameImageRate");
 
     // Profiling
     public static final String PROFILE_OPTS = System.getProperty("angelica.profile.opts", "event=wall,interval=5ms,alloc=512k,lock=10ms");

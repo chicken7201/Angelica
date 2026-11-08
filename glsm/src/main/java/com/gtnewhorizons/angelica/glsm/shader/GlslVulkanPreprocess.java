@@ -15,8 +15,10 @@ import org.taumc.glsl.grammar.GLSLParser;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 public final class GlslVulkanPreprocess {
@@ -57,7 +59,9 @@ public final class GlslVulkanPreprocess {
     private GlslVulkanPreprocess() {}
 
     private record CacheKey(String source, int glShaderType, boolean separateReadOnlyImages) {}
-    public record Result(String rewrittenSource, Set<String> boolUniforms, Set<String> explicitVsInputs) {}
+    public record Result(String rewrittenSource, Set<String> boolUniforms, Set<String> explicitVsInputs, Map<String, UniformBlock> uniformBlocks) {}
+
+    public record UniformBlock(String qualifierText, @Nullable String instanceName) {}
 
     /** Replace {@code [startIdx, stopIdx]} with {@code replacement}. */
     public record Edit(int startIdx, int stopIdx, String replacement) {}
@@ -110,7 +114,7 @@ public final class GlslVulkanPreprocess {
         final List<Edit> edits = new ArrayList<>();
         final Metadata meta = collectEdits(new ShaderIndex(root, source), glShaderType, debugName, separateReadOnlyImages, edits);
 
-        final Result out = new Result(applyEdits(source, edits), meta.boolUniforms(), meta.explicitVsInputs());
+        final Result out = new Result(applyEdits(source, edits), meta.boolUniforms(), meta.explicitVsInputs(), meta.uniformBlocks());
         synchronized (CACHE) {
             CACHE.putAndMoveToFirst(key, out);
             while (CACHE.size() > CACHE_MAX) CACHE.removeLast();
@@ -118,12 +122,13 @@ public final class GlslVulkanPreprocess {
         return out;
     }
 
-    public record Metadata(Set<String> boolUniforms, Set<String> explicitVsInputs, boolean needsSamplerless) {}
+    public record Metadata(Set<String> boolUniforms, Set<String> explicitVsInputs, boolean needsSamplerless, Map<String, UniformBlock> uniformBlocks) {}
 
     /** Collects source edits and metadata for the shader transformation. */
     public static Metadata collectEdits(ShaderIndex index, int glShaderType, String debugName, boolean separateReadOnlyImages, List<Edit> edits) {
         final boolean isVertex = glShaderType == GL20.GL_VERTEX_SHADER;
         final Set<String> bools = new HashSet<>();
+        Map<String, UniformBlock> uniformBlocks = Map.of();
         final Set<String> explicitInputs = new HashSet<>();
         final Set<String> readOnlyImages = new HashSet<>();
         boolean needsSamplerless = false;
@@ -132,6 +137,14 @@ public final class GlslVulkanPreprocess {
         final List<Integer> unlocatedVsInputStarts = new ArrayList<>();
 
         for (GLSLParser.DeclarationContext declaration : index.globalDeclarations()) {
+            if (declaration.LEFT_BRACE() != null && ShaderIndex.hasStorageQualifier(declaration.type_qualifier(), "uniform")) {
+                final GLSLParser.Type_qualifierContext blockQualifier = declaration.type_qualifier();
+                final String qualifierText = index.source().substring(startIdx(blockQualifier), stopIdx(blockQualifier) + 1);
+                final String instanceName = declaration.IDENTIFIER().size() > 1 ? declaration.IDENTIFIER(1).getText() : null;
+                if (uniformBlocks.isEmpty()) uniformBlocks = new HashMap<>();
+                uniformBlocks.put(declaration.IDENTIFIER(0).getText(), new UniformBlock(qualifierText, instanceName));
+                continue;
+            }
             final GLSLParser.Init_declarator_listContext list = declaration.init_declarator_list();
             if (list == null) continue;
             final GLSLParser.Single_declarationContext single = list.single_declaration();
@@ -225,7 +238,7 @@ public final class GlslVulkanPreprocess {
             }
         }
 
-        return new Metadata(bools, explicitInputs, needsSamplerless);
+        return new Metadata(bools, explicitInputs, needsSamplerless, uniformBlocks);
     }
 
     /** Reports whether Vulkan preprocessing substitutes this identifier. */

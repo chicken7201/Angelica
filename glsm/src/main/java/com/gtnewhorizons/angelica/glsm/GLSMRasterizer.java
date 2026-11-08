@@ -88,12 +88,12 @@ public final class GLSMRasterizer {
     static void probePointSizeRange(GLContextState glCtx) {
         final FloatBuffer range = glCtx.queryScratch;
         range.clear();
-        RENDER_BACKEND.getFloat(GL11.GL_POINT_SIZE_RANGE, range);
-        final float smooth = range.get(1);
-        // Core and GLES profiles do not expose the legacy aliased point-size query.
-        if (!RenderSystem.isCoreProfile() && !RenderSystem.isGLES()) {
-            RENDER_BACKEND.getFloat(GL12.GL_ALIASED_POINT_SIZE_RANGE, range);
+        float smooth = 0.0f;
+        if (!RenderSystem.isGLES()) {
+            RENDER_BACKEND.getFloat(GL11.GL_POINT_SIZE_RANGE, range);
+            smooth = range.get(1);
         }
+        RENDER_BACKEND.getFloat(GL12.GL_ALIASED_POINT_SIZE_RANGE, range);
         maxPointSize = Math.max(smooth, range.get(1));
     }
 
@@ -507,6 +507,14 @@ public final class GLSMRasterizer {
 
     public static boolean anyClipPlaneEnabled(GLContextState glCtx) {
         return glCtx.clipPlaneEnabledMask != 0;
+    }
+
+    public static boolean clipEmulationActive() {
+        return RenderSystem.isClipDistanceEmulated() && anyClipPlaneEnabled();
+    }
+
+    public static boolean clipEmulationActive(GLContextState glCtx) {
+        return RenderSystem.isClipDistanceEmulated() && anyClipPlaneEnabled(glCtx);
     }
 
     public static void glSampleCoverage(float value, boolean invert) {

@@ -63,7 +63,7 @@ public class RenderSystem {
     private static volatile boolean isGLES;
     private static volatile int glesVersion;
     private static volatile boolean glesDetected;
-    private static volatile boolean hasClipCullDistance;
+    private static boolean clipDistanceEmulated;
 
     private static volatile boolean isLTW;
     private static volatile boolean ltwDetected;
@@ -133,7 +133,12 @@ public class RenderSystem {
         supportsClearTexture = GLStateManager.capabilities.OpenGL44 || GLStateManager.capabilities.GL_ARB_clear_texture;
         supportsStencilTexturing = GLStateManager.capabilities.OpenGL43 || GLStateManager.capabilities.GL_ARB_stencil_texturing;
         supportsTextureStorage = isGLES ? glesVersion >= 300 : GLStateManager.capabilities.OpenGL42 || GLStateManager.capabilities.GL_ARB_texture_storage;
-        hasClipCullDistance = !isGLES || hasExtension("GL_EXT_clip_cull_distance");
+        final boolean esClipExt = !isGLES || hasExtension("GL_EXT_clip_cull_distance");
+        final int maxClipDistances = esClipExt ? RENDER_BACKEND.getInteger(GL30.GL_MAX_CLIP_DISTANCES) : 0;
+        clipDistanceEmulated = SystemProperties.EMULATE_CLIP_DISTANCES || maxClipDistances < GLStateManager.MAX_CLIP_PLANES;
+        if (clipDistanceEmulated) {
+            GLStateManager.LOGGER.info("Clip distances emulated (GL_MAX_CLIP_DISTANCES={}, forced={})", maxClipDistances, SystemProperties.EMULATE_CLIP_DISTANCES);
+        }
 
         // Cache maximum image units
         if (supportsImageLoadStore) {
@@ -472,11 +477,11 @@ public class RenderSystem {
         return supportsImageLoadStore;
     }
 
-    public static boolean hasClipCullDistance() {
-        return hasClipCullDistance;
+    public static boolean isClipDistanceEmulated() {
+        return clipDistanceEmulated;
     }
 
-    private static boolean hasExtension(String name) {
+    static boolean hasExtension(String name) {
         final int count = GLSMQueries.glGetInteger(GL30.GL_NUM_EXTENSIONS);
         for (int i = 0; i < count; i++) {
             if (name.equals(GLSMQueries.glGetStringi(GL11.GL_EXTENSIONS, i))) return true;

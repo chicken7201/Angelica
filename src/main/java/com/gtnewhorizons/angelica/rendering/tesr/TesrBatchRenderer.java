@@ -96,6 +96,11 @@ public final class TesrBatchRenderer {
         if (scopeDepth++ == 0) currentScope = ++scopeCounter;
     }
 
+    /** Reports whether a TESR batch scope is active. */
+    public boolean inScope() {
+        return scopeDepth != 0;
+    }
+
     /** Ends scope for TesrBatchRenderer. */
     public void endScope() {
         if (--scopeDepth == 0) currentScope = 0;

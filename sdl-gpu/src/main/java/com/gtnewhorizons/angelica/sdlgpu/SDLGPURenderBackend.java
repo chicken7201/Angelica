@@ -18,7 +18,9 @@ import me.eigenraven.lwjgl3ify.client.MainThreadExec;
 import org.lwjglx.Lwjgl3ifyEventLoop;
 import com.gtnewhorizons.angelica.glsm.backend.VSyncMode;
 import com.gtnewhorizons.angelica.glsm.backend.RenderBackend;
+import com.gtnewhorizons.angelica.glsm.backend.ScreenCapture;
 import com.gtnewhorizons.angelica.glsm.hooks.GLSMConfig;
+import com.gtnewhorizons.angelica.glsm.texture.TextureInfo;
 import com.gtnewhorizons.angelica.glsm.texture.TextureInfoCache;
 import com.gtnewhorizons.angelica.glsm.texture.TextureStaging;
 import com.gtnewhorizons.angelica.sdlgpu.compute.ComputeBinder;
@@ -42,6 +44,7 @@ import com.gtnewhorizons.angelica.sdlgpu.pipeline.PipelineStore;
 import com.gtnewhorizons.angelica.sdlgpu.pipeline.VertexAttribs;
 import com.gtnewhorizons.angelica.sdlgpu.resource.BufferParams;
 import com.gtnewhorizons.angelica.sdlgpu.resource.ByteRegionCopy;
+import com.gtnewhorizons.angelica.sdlgpu.resource.ColorSource;
 import com.gtnewhorizons.angelica.sdlgpu.resource.CopyRectClip;
 import com.gtnewhorizons.angelica.sdlgpu.resource.FBOClearTracker;
 import com.gtnewhorizons.angelica.sdlgpu.resource.FboState;
@@ -111,6 +114,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 
+import org.lwjgl.util.spvc.Spvc;
 import org.lwjgl.sdl.SDLGPU;
 import org.lwjgl.sdl.SDL_GPUBlitInfo;
 import org.lwjgl.sdl.SDLTimer;
@@ -168,7 +172,7 @@ public class SDLGPURenderBackend extends RenderBackend {
         new VoxelizationDispatcher(computeBinder);
     private final VertexAttribs vertexAttribs = new VertexAttribs();
     private final TextureOps textureOps = new TextureOps(device, frameManager, resourceManager, fboClearTracker);
-    private final ReadbackShadows readbackShadows = new ReadbackShadows(device);
+    private final ReadbackShadows readbackShadows = new ReadbackShadows(device, resourceManager, fenceTracker);
     private final PersistentBufferSync persistentSync = new PersistentBufferSync(frameManager, resourceManager,
         new PersistentBufferSync.UploadSink() {
             @Override public void enqueue(TransferThread.DeferredUpload upload) { enqueueUpload(upload); }
@@ -1382,8 +1386,7 @@ public class SDLGPURenderBackend extends RenderBackend {
         }
         resourceManager.dropArrayShadow(dstGlId);
         resourceManager.dropEboShadow(dstGlId);
-        resourceManager.markBufferContentsDefined(dstGlId);
-        readbackShadows.invalidate(dstGlId, writeOffset);
+        onBufferContentsWritten(dstGlId);
 
         final ByteBuffer dstUboShadow = resourceManager.getUboShadow(dstGlId);
         if (dstUboShadow != null) {
@@ -1464,9 +1467,8 @@ public class SDLGPURenderBackend extends RenderBackend {
         }
         final long cp = frameManager.ensureCopyPass();
         if (cp == 0) return;
-        if (resourceManager.getBufferGlUsage(dstGlId) == GL15.GL_STREAM_READ
-                && readbackShadows.scheduleDownload(cp, srcHandle, readOffset, dstGlId, writeOffset, size)) {
-            return;
+        if (resourceManager.getBufferGlUsage(dstGlId) == GL15.GL_STREAM_READ && !isBoundAsSsbo(s(), dstGlId)) {
+            readbackShadows.scheduleDownload(cp, srcHandle, readOffset, dstGlId, writeOffset, size);
         }
         try (var stack = MemoryStack.stackPush()) {
             final SDL_GPUBufferLocation src = SDL_GPUBufferLocation.calloc(stack).buffer(srcHandle).offset((int) readOffset);
@@ -1511,52 +1513,8 @@ public class SDLGPURenderBackend extends RenderBackend {
         return TextureInfoCache.isProxyTarget(target);
     }
 
-    private static boolean proxyLayersInHeight(int target) {
-        return target == GL30.GL_PROXY_TEXTURE_1D_ARRAY;
-    }
-
-    private static boolean proxyLayersInDepth(int target) {
-        return isProxyArrayTarget(target) && !proxyLayersInHeight(target);
-    }
-
-    private static boolean isProxyArrayTarget(int target) {
-        return target == GL30.GL_PROXY_TEXTURE_1D_ARRAY || target == GL30.GL_PROXY_TEXTURE_2D_ARRAY || target == GL32.GL_PROXY_TEXTURE_2D_MULTISAMPLE_ARRAY || target == GL40.GL_PROXY_TEXTURE_CUBE_MAP_ARRAY;
-    }
-
-    public static int proxyLevelSize(int base, int level) {
-        return PixelOps.mipLevelSize(base, level);
-    }
-
-    static int proxyDimensionLimit(int target) {
-        return switch (target) {
-            case GL12.GL_PROXY_TEXTURE_3D -> MAX_3D_TEXTURE_SIZE;
-            case GL13.GL_PROXY_TEXTURE_CUBE_MAP, GL40.GL_PROXY_TEXTURE_CUBE_MAP_ARRAY -> MAX_CUBE_MAP_TEXTURE_SIZE;
-            default -> MAX_TEXTURE_SIZE;
-        };
-    }
-
-    static int levelZeroEquivalentSize(int size, int level) {
-        if (size <= 0 || level < 0 || level >= Integer.SIZE - 1) return 0;
-        final long scaled = (long) size << level;
-        return scaled > Integer.MAX_VALUE ? 0 : (int) scaled;
-    }
-
     private void recordProxyTexImage(ContextState st, int target, int level, int internalFormat, int width, int height, int depth) {
-        final boolean layersInHeight = proxyLayersInHeight(target);
-        final boolean layersInDepth = proxyLayersInDepth(target);
-        final int dimLimit = proxyDimensionLimit(target);
-        final int w = levelZeroEquivalentSize(width, level);
-        final int h = layersInHeight ? height : levelZeroEquivalentSize(height, level);
-        final int d = layersInDepth ? depth : levelZeroEquivalentSize(depth, level);
-        final int hLimit = layersInHeight ? MAX_ARRAY_TEXTURE_LAYERS : dimLimit;
-        final int dLimit = layersInDepth ? MAX_ARRAY_TEXTURE_LAYERS : dimLimit;
-        final boolean fits = w >= 1 && w <= dimLimit && h >= 1 && h <= hLimit && d >= 1 && d <= dLimit
-            && resourceManager.isMappableTextureFormat(internalFormat);
-        if (fits) {
-            st.proxyTexture.accept(target, w, h, d, internalFormat);
-        } else {
-            st.proxyTexture.reject(target);
-        }
+        st.proxyTexture.record(target, level, internalFormat, width, height, depth, resourceManager.isMappableTextureFormat(internalFormat));
     }
 
     private static int boundTextureFor(ContextState st, int target) {
@@ -1828,23 +1786,13 @@ public class SDLGPURenderBackend extends RenderBackend {
     }
     @Override public int getTexLevelParameteri(int target, int level, int pname) {
         final ContextState cs = s();
-        if (isProxyTarget(target)) {
-            final ContextState.ProxyTextureState proxy = cs.proxyTexture;
-            if (proxy.target != target) return 0;
-            return switch (pname) {
-                case GL11.GL_TEXTURE_WIDTH -> proxyLevelSize(proxy.width, level);
-                case GL11.GL_TEXTURE_HEIGHT -> proxyLayersInHeight(target) ? proxy.height : proxyLevelSize(proxy.height, level);
-                case GL12.GL_TEXTURE_DEPTH -> proxyLayersInDepth(target) ? proxy.depth : proxyLevelSize(proxy.depth, level);
-                case GL11.GL_TEXTURE_INTERNAL_FORMAT -> proxy.internalFormat;
-                default -> 0;
-            };
-        }
+        if (isProxyTarget(target)) return cs.proxyTexture.levelParameter(target, level, pname);
         final int glId = cs.boundTextures[cs.activeTextureUnit];
         final ResourceManager.TextureMeta meta = resourceManager.getTextureMeta(glId);
         if (meta == null) return 0;
         return switch (pname) {
-            case GL11.GL_TEXTURE_WIDTH -> PixelOps.mipLevelSize(meta.width(), level);
-            case GL11.GL_TEXTURE_HEIGHT -> PixelOps.mipLevelSize(meta.height(), level);
+            case GL11.GL_TEXTURE_WIDTH -> TextureInfo.mipLevelSize(meta.width(), level);
+            case GL11.GL_TEXTURE_HEIGHT -> TextureInfo.mipLevelSize(meta.height(), level);
             case GL11.GL_TEXTURE_INTERNAL_FORMAT -> {
                 final int stored = meta.glFormat();
                 yield TextureInfoCache.isGenericCompressedInternalFormat(stored) ? GL11.GL_RGBA8 : stored;
@@ -2002,8 +1950,8 @@ public class SDLGPURenderBackend extends RenderBackend {
             if (meta != null) {
                 fbo.colorFormats[colorIdx] = meta.sdlFormat();
                 if (colorIdx == 0) {
-                    fbo.width = PixelOps.mipLevelSize(meta.width(), level);
-                    fbo.height = PixelOps.mipLevelSize(meta.height(), level);
+                    fbo.width = TextureInfo.mipLevelSize(meta.width(), level);
+                    fbo.height = TextureInfo.mipLevelSize(meta.height(), level);
                 }
             }
             fbo.colorAttachmentCount = Math.max(fbo.colorAttachmentCount, colorIdx + 1);
@@ -2213,6 +2161,32 @@ public class SDLGPURenderBackend extends RenderBackend {
         if (capacity < needed) throw new IllegalArgumentException("readback of " + width + "x" + height + " format 0x" + Integer.toHexString(format) + " type 0x" + Integer.toHexString(type) + " needs " + needed + " bytes, destination has " + capacity);
     }
 
+    @Override public ScreenCapture createScreenCapture(int width, int height) {
+        return new SDLScreenCapture(this, device, frameManager, resourceManager, textureOps, width, height);
+    }
+
+    ColorSource colorSourceForRead(int fboId) {
+        final FboState fbo = fboId != 0 ? resourceManager.getFbo(fboId) : null;
+        if (fbo == null) return null;
+        final ContextState cs = s();
+        final ColorSource source = resolveColorAttachment(fbo, cs.readColor);
+        if (source.texture == 0L || source.width <= 0 || source.height <= 0) return null;
+        fboClearTracker.materializePendingClearForRead(cs, frameManager.frame(), source.texture);
+        return source;
+    }
+
+    private ColorSource resolveColorAttachment(FboState fbo, ColorSource out) {
+        final int colorGlId = fbo.colorGlIds[fbo.readBufferIndex];
+        final ResourceManager.TextureMeta meta = resourceManager.getTextureMeta(colorGlId);
+        out.texture = resourceManager.getTextureHandle(colorGlId);
+        out.level = fbo.colorLevels[fbo.readBufferIndex];
+        out.sdlFormat = meta != null ? meta.sdlFormat() : SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+        out.glBaseFormat = meta != null ? PixelPack.glBaseFormat(meta.glFormat()) : GL11.GL_RGBA;
+        out.width = meta != null ? TextureInfo.mipLevelSize(meta.width(), out.level) : fbo.width;
+        out.height = meta != null ? TextureInfo.mipLevelSize(meta.height(), out.level) : fbo.height;
+        return out;
+    }
+
     private void readPixelsInto(int x, int y, int width, int height, int format, int type, long dst, long capacity, int pbo, long pboOffset) {
         PixelPack.validate(format, type);
         if (width <= 0 || height <= 0) return;
@@ -2242,14 +2216,13 @@ public class SDLGPURenderBackend extends RenderBackend {
             final FboState fbo = resourceManager.getFbo(cs.boundReadFboId);
             if (fbo == null) return;
             if (kind == READBACK_COLOR) {
-                final int colorGlId = fbo.colorGlIds[fbo.readBufferIndex];
-                final ResourceManager.TextureMeta meta = resourceManager.getTextureMeta(colorGlId);
-                colorTex = resourceManager.getTextureHandle(colorGlId);
-                colorFormat = meta != null ? meta.sdlFormat() : SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
-                if (meta != null) colorBase = PixelPack.glBaseFormat(meta.glFormat());
-                srcLevel = fbo.colorLevels[fbo.readBufferIndex];
-                srcWidth = meta != null ? PixelOps.mipLevelSize(meta.width(), srcLevel) : fbo.width;
-                srcHeight = meta != null ? PixelOps.mipLevelSize(meta.height(), srcLevel) : fbo.height;
+                final ColorSource source = resolveColorAttachment(fbo, cs.readColor);
+                colorTex = source.texture;
+                colorFormat = source.sdlFormat;
+                colorBase = source.glBaseFormat;
+                srcLevel = source.level;
+                srcWidth = source.width;
+                srcHeight = source.height;
             } else {
                 if (fbo.depthLevel != 0) throw new UnsupportedOperationException("glReadPixels of a depth/stencil attachment at level " + fbo.depthLevel + " is not supported on SDL-GPU");
                 depthTex = fbo.depthTexture;
@@ -2276,8 +2249,8 @@ public class SDLGPURenderBackend extends RenderBackend {
         final int glId = boundTextureFor(cs, target);
         final ResourceManager.TextureMeta meta = resourceManager.getTextureMeta(glId);
         if (meta == null || level < 0 || level >= meta.levels()) return;
-        final int width = PixelOps.mipLevelSize(meta.width(), level);
-        final int height = PixelOps.mipLevelSize(meta.height(), level);
+        final int width = TextureInfo.mipLevelSize(meta.width(), level);
+        final int height = TextureInfo.mipLevelSize(meta.height(), level);
         if (width <= 0 || height <= 0) return;
         checkReadbackCapacity(format, type, width, height, loadPackState(cs), capacity);
         final int kind = readbackKind(format);
@@ -2366,7 +2339,7 @@ public class SDLGPURenderBackend extends RenderBackend {
         } finally {
             region.clear();
         }
-        resourceManager.markBufferContentsDefined(pbo);
+        onBufferContentsWritten(pbo);
         flushAndSubmitMidFrame();
     }
 
@@ -2593,17 +2566,23 @@ public class SDLGPURenderBackend extends RenderBackend {
             if (length != null && length.remaining() > 0) length.put(0, 0);
             return;
         }
-        if (s == null) return;
-        final byte[] bytes = s.getBytes(StandardCharsets.UTF_8);
-        final int n = Math.min(bytes.length, out.remaining());
-        out.put(bytes, 0, n);
+        final byte[] bytes = (s == null ? "" : s).getBytes(StandardCharsets.UTF_8);
+        final int pos = out.position();
+        final int max = out.remaining();
+        final int n = Math.max(0, Math.min(bytes.length, max - 1));
+        for (int i = 0; i < n; i++) out.put(pos + i, bytes[i]);
+        if (max > 0) out.put(pos + n, (byte) 0);
         if (length != null && length.remaining() > 0) length.put(0, n);
+    }
+    private static int glStringLength(String s) {
+        return s == null || s.isEmpty() ? 0 : s.getBytes(StandardCharsets.UTF_8).length + 1;
     }
     @Override public int getShaderi(int shader, int pname) {
         return switch (pname) {
             case GL20.GL_COMPILE_STATUS  ->  shaderManager.isCompiled(shader) ? 1 : 0;
             case GL20.GL_SHADER_TYPE     ->  shaderManager.getShaderType(shader);
-            case GL20.GL_INFO_LOG_LENGTH ->  shaderManager.getShaderInfoLog(shader).length();
+            case GL20.GL_INFO_LOG_LENGTH ->  glStringLength(shaderManager.getShaderInfoLog(shader));
+            case GL20.GL_SHADER_SOURCE_LENGTH -> glStringLength(shaderManager.getShaderSource(shader));
             default -> 0;
         };
     }
@@ -2611,7 +2590,7 @@ public class SDLGPURenderBackend extends RenderBackend {
         return switch (pname) {
             case GL20.GL_LINK_STATUS -> shaderManager.isLinked(program) ? 1 : 0;
             case GL20.GL_VALIDATE_STATUS -> shaderManager.isLinked(program) ? 1 : 0;
-            case GL20.GL_INFO_LOG_LENGTH -> shaderManager.getProgramInfoLog(program).length();
+            case GL20.GL_INFO_LOG_LENGTH -> glStringLength(shaderManager.getProgramInfoLog(program));
             case GL20.GL_ATTACHED_SHADERS -> shaderManager.getAttachedShaderCount(program);
             case GL20.GL_ACTIVE_UNIFORMS -> {
                 final var entries = getOrBuildUniformEntries(program);
@@ -2651,6 +2630,7 @@ public class SDLGPURenderBackend extends RenderBackend {
             final int loc = e.getValue();
             int glType;
             int arrayLen = 1;
+            boolean array = false;
             if (prog.allSamplerNames.contains(name)) {
                 glType = GL20.GL_SAMPLER_2D;
             } else {
@@ -2659,6 +2639,7 @@ public class SDLGPURenderBackend extends RenderBackend {
                 if (umi != null) {
                     glType = FormatMap.mapMemberInfoToGlType(umi);
                     arrayLen = Math.max(1, umi.arrayLen());
+                    array = umi.arrayStride() > 0;
                 } else {
                     glType = GL20.GL_FLOAT_VEC4;
                 }
@@ -2666,7 +2647,7 @@ public class SDLGPURenderBackend extends RenderBackend {
                     glType = FormatMap.remapUnsignedIntToBool(glType);
                 }
             }
-            result.add(new UniformEntry(name, glType, arrayLen));
+            result.add(new UniformEntry(array ? name + "[0]" : name, glType, arrayLen));
         }
         result.sort(Comparator.comparing(UniformEntry::name));
         final List<UniformEntry> immutable = Collections.unmodifiableList(result);
@@ -2724,6 +2705,78 @@ public class SDLGPURenderBackend extends RenderBackend {
     }
     @Override public int getUniformLocation(int program, ByteBuffer name) {
         return shaderManager.getUniformLocation(program, MemoryUtil.memASCII(name));
+    }
+    @Override public void getUniformfv(int program, int location, FloatBuffer params) {
+        final Readback rb = readback(program, location);
+        if (rb == null) return;
+        final int pos = params.position();
+        final int count = Math.min(rb.count(), params.remaining());
+        for (int i = 0; i < count; i++) {
+            final float raw = rb.raw(i);
+            final int bits = Float.floatToRawIntBits(raw);
+            params.put(pos + i, switch (rb.type()) {
+                case FLOAT -> raw;
+                case INT -> (float) bits;
+                case UINT -> (float) (bits & 0xFFFFFFFFL);
+                case BOOL -> bits != 0 ? 1f : 0f;
+                case OPAQUE -> rb.opaqueValue();
+            });
+        }
+    }
+    @Override public void getUniformiv(int program, int location, IntBuffer params) {
+        final Readback rb = readback(program, location);
+        if (rb == null) return;
+        final int pos = params.position();
+        final int count = Math.min(rb.count(), params.remaining());
+        for (int i = 0; i < count; i++) {
+            final float raw = rb.raw(i);
+            final int bits = Float.floatToRawIntBits(raw);
+            params.put(pos + i, switch (rb.type()) {
+                case FLOAT -> roundHalfAwayFromZero(raw);
+                case BOOL -> bits != 0 ? 1 : 0;
+                case INT, UINT -> bits;
+                case OPAQUE -> rb.opaqueValue();
+            });
+        }
+    }
+    private enum ReadType { FLOAT, INT, UINT, BOOL, OPAQUE }
+    private record Readback(float[] storage, int start, int count, ReadType type, int opaqueValue) {
+        float raw(int i) {
+            return storage != null && start + i < storage.length ? storage[start + i] : 0f;
+        }
+    }
+    private Readback readback(int program, int location) {
+        final ShaderManager.ProgramObject prog = shaderManager.getProgram(program);
+        if (prog == null || !prog.linked || location < 0 || location >= prog.uniformSlotCount) return null;
+        final int kind = prog.locationKind[location];
+        if (kind != ShaderManager.ProgramObject.LOCATION_KIND_PLAIN) {
+            return new Readback(null, 0, 1, ReadType.OPAQUE, opaqueUnit(prog, location, kind));
+        }
+        final ShaderManager.UniformMemberInfo info = prog.memberInfo(location);
+        if (info == null) return null;
+        final int perElement = info.vectorSize() * info.columns();
+        final int index = prog.arrayIndexBySlot[location];
+        final int base = location - index;
+        final float[] storage = s().uniformStaging(prog).uniformDataBySlot[base];
+        return new Readback(storage, index * perElement, perElement, readType(prog, base, info), 0);
+    }
+    private static ReadType readType(ShaderManager.ProgramObject prog, int base, ShaderManager.UniformMemberInfo info) {
+        if (info.baseType() == Spvc.SPVC_BASETYPE_FP32) return ReadType.FLOAT;
+        if (info.baseType() != Spvc.SPVC_BASETYPE_UINT32) return ReadType.INT;
+        final String name = prog.locationName[base];
+        return name != null && prog.boolUniforms.contains(name) ? ReadType.BOOL : ReadType.UINT;
+    }
+    private static int roundHalfAwayFromZero(float f) {
+        final double r = Math.floor(Math.abs((double) f) + 0.5);
+        return (int) (f < 0 ? -r : r);
+    }
+    private static int opaqueUnit(ShaderManager.ProgramObject prog, int location, int kind) {
+        final String name = prog.locationName[location];
+        if (name == null) return 0;
+        final int unit = kind == ShaderManager.ProgramObject.LOCATION_KIND_SAMPLER
+            ? prog.samplerTextureUnits.getInt(name)
+            : prog.imageTextureUnits.getInt(name);
+        return Math.max(unit, 0);
     }
     @Override public void getShaderSource(int shader, IntBuffer length, ByteBuffer source) {
         writeUtf8(shaderManager.getShaderSource(shader), length, source);
@@ -2974,7 +3027,7 @@ public class SDLGPURenderBackend extends RenderBackend {
             case GL31.GL_COPY_WRITE_BUFFER -> st.boundCopyWriteBuffer = buffer;
             case GL43.GL_SHADER_STORAGE_BUFFER -> {
                 st.boundSSBO = buffer;
-                resourceManager.markBufferContentsDefined(buffer);
+                onBufferContentsWritten(buffer);
             }
         }
     }
@@ -3064,8 +3117,8 @@ public class SDLGPURenderBackend extends RenderBackend {
     /** Updates respecify store state for SDLGPURenderBackend. */
     private void respecifyStore(ContextState cs, int target, int glId, long size, int usage) {
         freePlainMappingFor(glId, true);
-        resourceManager.recordBufferGlParams(glId, usage, BufferParams.MUTABLE_STORE);
         if (target == GL31.GL_UNIFORM_BUFFER) {
+            resourceManager.recordBufferGlParams(glId, usage, BufferParams.MUTABLE_STORE);
             if (resourceManager.getBufferSize(glId) == size) return;
             if (size > 0) {
                 resourceManager.recordBufferSizeOnly(glId, size);
@@ -3080,6 +3133,7 @@ public class SDLGPURenderBackend extends RenderBackend {
         readbackShadows.release(glId);
         resourceManager.deleteBuffer(glId);
         resourceManager.createBuffer(glId, sdlUsage, size);
+        resourceManager.recordBufferGlParams(glId, usage, BufferParams.MUTABLE_STORE);
         if (target == GL15.GL_ARRAY_BUFFER) cs.bumpAttribStateGen();
     }
 
@@ -3120,8 +3174,8 @@ public class SDLGPURenderBackend extends RenderBackend {
     private void respecifyStore(ContextState cs, int target, int glId, ByteBuffer data, int usage) {
         final long dataSize = data.remaining();
         freePlainMappingFor(glId, true);
-        resourceManager.recordBufferGlParams(glId, usage, BufferParams.MUTABLE_STORE);
         if (target == GL31.GL_UNIFORM_BUFFER) {
+            resourceManager.recordBufferGlParams(glId, usage, BufferParams.MUTABLE_STORE);
             if (dataSize > 0) {
                 resourceManager.recordBufferSizeOnly(glId, dataSize);
                 final ByteBuffer shadow = resourceManager.getOrAllocUboShadow(glId, (int) dataSize);
@@ -3137,6 +3191,7 @@ public class SDLGPURenderBackend extends RenderBackend {
         readbackShadows.release(glId);
         resourceManager.deleteBuffer(glId);
         final long handle = resourceManager.createBuffer(glId, sdlUsage, dataSize);
+        resourceManager.recordBufferGlParams(glId, usage, BufferParams.MUTABLE_STORE);
         if (target == GL15.GL_ARRAY_BUFFER) cs.bumpAttribStateGen();
         if (target == GL15.GL_ELEMENT_ARRAY_BUFFER && dataSize > 0
                 && (cs.primitiveRestartEnabled || resourceManager.hasEboShadow(glId))) {
@@ -3151,7 +3206,7 @@ public class SDLGPURenderBackend extends RenderBackend {
             } else if (frameManager.getCommandBuffer() != 0) {
                 resourceManager.uploadToBuffer(frameManager.ensureCopyPass(), data, handle, 0, false);
             }
-            resourceManager.markBufferContentsDefined(glId);
+            onBufferContentsWritten(glId);
         }
     }
 
@@ -3242,7 +3297,7 @@ public class SDLGPURenderBackend extends RenderBackend {
                     FrameManager.warnDroppedOutsideFrame(droppedSsboWriteWarned, "bufferSubData(GL_SHADER_STORAGE_BUFFER)");
                     droppedSsboWriteWarned = true;
                 }
-                resourceManager.markBufferContentsDefined(glId);
+                onBufferContentsWritten(glId);
                 return;
             }
             final boolean cycle = target == GL40.GL_DRAW_INDIRECT_BUFFER;
@@ -3251,7 +3306,7 @@ public class SDLGPURenderBackend extends RenderBackend {
             } else if (frameManager.getCommandBuffer() != 0) {
                 resourceManager.uploadToBuffer(frameManager.ensureCopyPass(), data, handle, offset, cycle);
             }
-            resourceManager.markBufferContentsDefined(glId);
+            onBufferContentsWritten(glId);
         }
     }
 
@@ -3317,7 +3372,7 @@ public class SDLGPURenderBackend extends RenderBackend {
                 } else if (frameManager.getCommandBuffer() != 0) {
                     resourceManager.uploadToBuffer(frameManager.ensureCopyPass(), staging, gpuHandle, m.offset, false);
                 }
-                resourceManager.markBufferContentsDefined(glId);
+                onBufferContentsWritten(glId);
             }
             final ByteBuffer old = resourceManager.putPboStaging(glId, staging);
             if (old != null) MemoryUtil.memFree(old);
@@ -3331,7 +3386,7 @@ public class SDLGPURenderBackend extends RenderBackend {
                 shadow.position((int) m.offset).limit((int) (m.offset + m.length));
                 shadow.put(staging);
                 shadow.position(0).limit(shadow.capacity());
-                resourceManager.markBufferContentsDefined(glId);
+                onBufferContentsWritten(glId);
                 cs.uboRangeGen++;
             }
             MemoryUtil.memFree(staging);
@@ -3376,7 +3431,7 @@ public class SDLGPURenderBackend extends RenderBackend {
             } else if (frameManager.getCommandBuffer() != 0) {
                 resourceManager.uploadToBuffer(frameManager.ensureCopyPass(), staging, gpuHandle, m.offset, false);
             }
-            resourceManager.markBufferContentsDefined(glId);
+            onBufferContentsWritten(glId);
         }
 
         MemoryUtil.memFree(staging);
@@ -3430,6 +3485,10 @@ public class SDLGPURenderBackend extends RenderBackend {
 
         if (handle == 0 || resourceManager.hasUndefinedContents(glId)) {
             MemoryUtil.memSet(staging, 0);
+            return;
+        }
+        if (readbackShadows.serve(glId, offset, staging, len)) {
+            staging.position(0).limit(len);
             return;
         }
 
@@ -3549,7 +3608,22 @@ public class SDLGPURenderBackend extends RenderBackend {
         downloadBufferBlocking(handle, (int) offset, rem, data);
     }
 
-    /** Reads ubo store for SDLGPURenderBackend. */
+    /** Invalidates CPU shadows after a GPU buffer write. */
+    private void onBufferContentsWritten(int glId) {
+        resourceManager.markBufferContentsDefined(glId);
+        readbackShadows.invalidateAll(glId);
+    }
+
+    /** Reports buffers that GPU passes may modify through SSBO bindings. */
+    private static boolean isBoundAsSsbo(ContextState st, int glId) {
+        if (st.boundSSBO == glId) return true;
+        for (int i = 0; i < ContextState.MAX_INDEXED_BUFFERS; i++) {
+            if (st.boundSsboByIndex[i] == glId) return true;
+        }
+        return false;
+    }
+
+    /** Reads a buffered UBO value from its CPU shadow. */
     private boolean readUboStore(int glId, long offset, ByteBuffer dst, int len) {
         final ByteBuffer shadow = resourceManager.getUboShadow(glId);
         if (shadow == null) return false;
@@ -4070,6 +4144,7 @@ public class SDLGPURenderBackend extends RenderBackend {
         if (refuseImmutable(buffer, "glNamedBufferData on immutable storage")) return;
         final int sdlUsage = FormatMap.mapBufferUsage(GL15.GL_ARRAY_BUFFER);
         freePlainMappingFor(buffer, true);
+        readbackShadows.release(buffer);
         resourceManager.deleteBuffer(buffer);
         resourceManager.createBuffer(buffer, sdlUsage, size);
         resourceManager.recordBufferGlParams(buffer, usage, BufferParams.MUTABLE_STORE);
@@ -4079,12 +4154,13 @@ public class SDLGPURenderBackend extends RenderBackend {
         if (refuseImmutable(buffer, "glNamedBufferData on immutable storage")) return;
         final int sdlUsage = FormatMap.mapBufferUsage(GL15.GL_ARRAY_BUFFER);
         freePlainMappingFor(buffer, true);
+        readbackShadows.release(buffer);
         resourceManager.deleteBuffer(buffer);
         final long handle = resourceManager.createBuffer(buffer, sdlUsage, data.remaining());
         resourceManager.recordBufferGlParams(buffer, usage, BufferParams.MUTABLE_STORE);
         if (handle != 0 && frameManager.getCommandBuffer() != 0) {
             resourceManager.uploadToBuffer(frameManager.ensureCopyPass(), data, handle, 0, false);
-            resourceManager.markBufferContentsDefined(buffer);
+            onBufferContentsWritten(buffer);
         }
     }
     @Override public void namedBufferData(int buffer, FloatBuffer data, int usage) {
@@ -4095,7 +4171,7 @@ public class SDLGPURenderBackend extends RenderBackend {
         final long handle = resourceManager.getBufferHandle(buffer);
         if (handle != 0 && frameManager.getCommandBuffer() != 0) {
             resourceManager.uploadToBuffer(frameManager.ensureCopyPass(), data, handle, offset, false);
-            resourceManager.markBufferContentsDefined(buffer);
+            onBufferContentsWritten(buffer);
         }
     }
     @Override public void copyTextureSubImage2D(int texture, int target, int level, int xoffset, int yoffset, int x, int y, int width, int height) {
@@ -4148,8 +4224,8 @@ public class SDLGPURenderBackend extends RenderBackend {
         final ResourceManager.TextureMeta meta = resourceManager.getTextureMeta(texture);
         if (meta == null) return 0;
         return switch (pname) {
-            case GL11.GL_TEXTURE_WIDTH -> PixelOps.mipLevelSize(meta.width(), level);
-            case GL11.GL_TEXTURE_HEIGHT -> PixelOps.mipLevelSize(meta.height(), level);
+            case GL11.GL_TEXTURE_WIDTH -> TextureInfo.mipLevelSize(meta.width(), level);
+            case GL11.GL_TEXTURE_HEIGHT -> TextureInfo.mipLevelSize(meta.height(), level);
             case GL11.GL_TEXTURE_INTERNAL_FORMAT -> {
                 final int stored = meta.glFormat();
                 yield TextureInfoCache.isGenericCompressedInternalFormat(stored) ? GL11.GL_RGBA8 : stored;
@@ -4167,6 +4243,7 @@ public class SDLGPURenderBackend extends RenderBackend {
             case GL20.GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS -> 32;
             case GL20.GL_MAX_VERTEX_ATTRIBS -> 16;
             case GL20.GL_MAX_DRAW_BUFFERS -> 8;
+            case GL30.GL_MAX_CLIP_DISTANCES -> device.hasClipDistance() ? GLStateManager.MAX_CLIP_PLANES : 0;
             case GL30.GL_MAX_COLOR_ATTACHMENTS -> 8;
             case GL15.GL_ARRAY_BUFFER_BINDING -> cs.boundArrayBuffer;
             case GL15.GL_ELEMENT_ARRAY_BUFFER_BINDING -> cs.currentVao.elementBuffer;
@@ -4229,10 +4306,10 @@ public class SDLGPURenderBackend extends RenderBackend {
     }
 
     static final int MAX_UNIFORM_COMPONENTS_PER_STAGE = 4096 / Float.BYTES;
-    static final int MAX_ARRAY_TEXTURE_LAYERS = 256;
-    static final int MAX_TEXTURE_SIZE = 16384;
-    static final int MAX_CUBE_MAP_TEXTURE_SIZE = 16384;
-    static final int MAX_3D_TEXTURE_SIZE = 2048;
+    public static final int MAX_ARRAY_TEXTURE_LAYERS = 256;
+    public static final int MAX_TEXTURE_SIZE = 16384;
+    public static final int MAX_CUBE_MAP_TEXTURE_SIZE = 16384;
+    public static final int MAX_3D_TEXTURE_SIZE = 2048;
     /** D3D12 and Metal both cap anisotropy at 16, and every desktop Vulkan driver reports 16. */
     static final float MAX_ANISOTROPY = 16.0f;
 
@@ -4362,7 +4439,7 @@ public class SDLGPURenderBackend extends RenderBackend {
         final int chunkBytes = (int) Math.min(size, defer ? CLEAR_CHUNK_BYTES : FILL_CHUNK_BYTES);
         final int alignedChunk = (chunkBytes / elemBytes) * elemBytes;
         if (alignedChunk == 0) return;
-        resourceManager.markBufferContentsDefined(glId);
+        onBufferContentsWritten(glId);
         final boolean zero = data == null || isAllZero(data, elemBytes);
         final ByteBuffer chunk = zero ? MemoryUtil.memCalloc(alignedChunk) : MemoryUtil.memAlloc(alignedChunk);
         try {
@@ -4396,9 +4473,9 @@ public class SDLGPURenderBackend extends RenderBackend {
         if (texHandle == 0 || frameManager.getCommandBuffer() == 0) return;
         final ResourceManager.TextureMeta meta = resourceManager.getTextureMeta(texture);
         if (meta == null || level >= meta.levels()) return;
-        final int mipW = PixelOps.mipLevelSize(meta.width(), level);
-        final int mipH = PixelOps.mipLevelSize(meta.height(), level);
-        final int mipD = PixelOps.mipLevelSize(meta.depth(), level);
+        final int mipW = TextureInfo.mipLevelSize(meta.width(), level);
+        final int mipH = TextureInfo.mipLevelSize(meta.height(), level);
+        final int mipD = TextureInfo.mipLevelSize(meta.depth(), level);
         final int bpp = PixelOps.sdlFormatTexelBytes(meta.sdlFormat());
         if (mipW <= 0 || mipH <= 0 || bpp <= 0) return;
 

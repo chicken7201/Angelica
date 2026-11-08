@@ -1,14 +1,17 @@
 package com.gtnewhorizons.angelica.sdlgpu.frame;
 
 import com.gtnewhorizons.angelica.glsm.GLContextState;
+import com.gtnewhorizons.angelica.glsm.texture.ProxyTexture;
 import com.gtnewhorizons.angelica.sdlgpu.SDLGPURenderBackend;
 import com.gtnewhorizons.angelica.sdlgpu.pipeline.PipelineCache;
+import com.gtnewhorizons.angelica.sdlgpu.resource.ColorSource;
 import com.gtnewhorizons.angelica.sdlgpu.resource.MappedRange;
 import com.gtnewhorizons.angelica.sdlgpu.resource.PackState;
 import com.gtnewhorizons.angelica.sdlgpu.shader.LogicOpVariant;
 import com.gtnewhorizons.angelica.sdlgpu.shader.ShaderManager;
 import com.gtnewhorizons.angelica.sdlgpu.shader.UniformStaging;
 import it.unimi.dsi.fastutil.objects.Reference2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.longs.Long2FloatOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
@@ -64,28 +67,10 @@ public final class ContextState {
 
     public final PixelStoreState pixelStore = new PixelStoreState();
     public final PackState packState = new PackState();
+    public final ColorSource readColor = new ColorSource();
 
-    public static final class ProxyTextureState {
-        public int target;
-        public int width;
-        public int height;
-        public int depth;
-        public int internalFormat;
-
-        public void accept(int target, int width, int height, int depth, int internalFormat) {
-            this.target = target;
-            this.width = width;
-            this.height = height;
-            this.depth = depth;
-            this.internalFormat = internalFormat;
-        }
-
-        public void reject(int target) {
-            accept(target, 0, 0, 0, 0);
-        }
-    }
-
-    public final ProxyTextureState proxyTexture = new ProxyTextureState();
+    public final ProxyTexture proxyTexture = new ProxyTexture(SDLGPURenderBackend.MAX_TEXTURE_SIZE, SDLGPURenderBackend.MAX_3D_TEXTURE_SIZE,
+        SDLGPURenderBackend.MAX_CUBE_MAP_TEXTURE_SIZE, SDLGPURenderBackend.MAX_ARRAY_TEXTURE_LAYERS);
 
     public static final class VAOState {
         public final boolean[] attribEnabled = new boolean[MAX_VERTEX_ATTRIBS];
@@ -199,6 +184,7 @@ public final class ContextState {
     private final Reference2ObjectOpenHashMap<ShaderManager.ProgramObject, UniformStaging> uniformStagingByProgram = new Reference2ObjectOpenHashMap<>();
     private ShaderManager.ProgramObject stagingProg;
     private UniformStaging currentUniformStaging;
+    public final Int2ObjectOpenHashMap<float[]> uniformArrayScratch = new Int2ObjectOpenHashMap<>();
 
     public UniformStaging uniformStaging(ShaderManager.ProgramObject prog) {
         if (prog == stagingProg) return currentUniformStaging;

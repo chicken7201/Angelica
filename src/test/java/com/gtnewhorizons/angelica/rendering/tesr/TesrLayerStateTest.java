@@ -231,32 +231,8 @@ class TesrLayerStateTest {
                         GLSMMatrices.setTextureMatrix(0, new Matrix4f());
                     });
             }),
-            Arguments.of("foreign program and framebuffer", (Supplier<BatchScenario>) () -> {
-                final int program = GlTestSupport.program(GlTestSupport.TRIVIAL_VS, GlTestSupport.TRIVIAL_FS);
-                final int framebuffer = GLSMFramebuffer.glGenFramebuffers();
-                GLSMFramebuffer.glBindFramebuffer(GL30.GL_FRAMEBUFFER, 0);
-                BatchDrawDefaults.capturePassFramebuffer();
-                GLSMFramebuffer.glBindFramebuffer(GL30.GL_FRAMEBUFFER, framebuffer);
-                GLSMPrograms.glUseProgram(program);
-                return new BatchScenario(
-                    () -> {
-                        assertEquals(0, GLSMPrograms.getActiveProgram(), "program during batch draw");
-                        assertEquals(0, GLSMFramebuffer.getDrawFramebuffer(), "framebuffer during batch draw");
-                        assertEquals(0, GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING), "driver draw framebuffer during batch draw");
-                    },
-                    () -> {
-                        assertEquals(program, GLSMPrograms.getActiveProgram(), "caller program restored");
-                        assertEquals(framebuffer, GLSMFramebuffer.getDrawFramebuffer(), "caller framebuffer restored");
-                        assertEquals(program, GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM), "driver caller program restored");
-                        assertEquals(framebuffer, GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING), "driver caller framebuffer restored");
-                    },
-                    () -> {
-                        GLSMPrograms.glUseProgram(0);
-                        GLSMFramebuffer.glBindFramebuffer(GL30.GL_FRAMEBUFFER, 0);
-                        GLSMFramebuffer.glDeleteFramebuffers(framebuffer);
-                        GLSMPrograms.glDeleteProgram(program);
-                    });
-            }),
+            Arguments.of("foreign program and framebuffer", (Supplier<BatchScenario>) () -> foreignProgram(false)),
+            Arguments.of("angelica-owned program and framebuffer", (Supplier<BatchScenario>) () -> foreignProgram(true)),
             Arguments.of("filter from before an item renderer's blur window", (Supplier<BatchScenario>) () -> {
                 final int texture = GLSMTextures.glGenTextures();
                 GLSMTextures.glActiveTexture(GL13.GL_TEXTURE0);
@@ -284,6 +260,36 @@ class TesrLayerStateTest {
                         GLSMTextures.glDeleteTextures(texture);
                     });
             }));
+    }
+
+    /** Creates a scenario with an interrupted foreign or owned program. */
+    private static BatchScenario foreignProgram(boolean owned) {
+        final int program = GlTestSupport.program(GlTestSupport.TRIVIAL_VS, GlTestSupport.TRIVIAL_FS);
+        if (owned) DepthColorStorage.registerOwnedProgram(program);
+        final int framebuffer = GLSMFramebuffer.glGenFramebuffers();
+        GLSMFramebuffer.glBindFramebuffer(GL30.GL_FRAMEBUFFER, 0);
+        BatchDrawDefaults.capturePassFramebuffer();
+        GLSMFramebuffer.glBindFramebuffer(GL30.GL_FRAMEBUFFER, framebuffer);
+        GLSMPrograms.glUseProgram(program);
+        return new BatchScenario(
+            () -> {
+                assertEquals(0, GLSMPrograms.getActiveProgram(), "program during batch draw");
+                assertEquals(0, GLSMFramebuffer.getDrawFramebuffer(), "framebuffer during batch draw");
+                assertEquals(0, GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING), "driver draw framebuffer during batch draw");
+            },
+            () -> {
+                assertEquals(program, GLSMPrograms.getActiveProgram(), "caller program restored");
+                assertEquals(framebuffer, GLSMFramebuffer.getDrawFramebuffer(), "caller framebuffer restored");
+                assertEquals(program, GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM), "driver caller program restored");
+                assertEquals(framebuffer, GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING), "driver caller framebuffer restored");
+            },
+            () -> {
+                GLSMPrograms.glUseProgram(0);
+                DepthColorStorage.unregisterOwnedProgram(program);
+                GLSMFramebuffer.glBindFramebuffer(GL30.GL_FRAMEBUFFER, 0);
+                GLSMFramebuffer.glDeleteFramebuffers(framebuffer);
+                GLSMPrograms.glDeleteProgram(program);
+            });
     }
 
     /** Verifies batch draw does not inherit the interrupted renderers state. */
@@ -389,7 +395,40 @@ class TesrLayerStateTest {
         });
     }
 
-    /** Updates with pack state for TesrLayerStateTest. */
+    /** Checks flattened TESR lighting and pre-lit font exclusion. */
+    @Test
+    void flattenedLitDrawsBakeOnlyWhenThePackDrawsAndTheTextIsNotPreLit() {
+        withPack(true, drawing -> {
+            GLSMMatrices.glMatrixMode(GL11.GL_MODELVIEW);
+            GLSMMatrices.glPushMatrix();
+            try {
+                GLSMMatrices.glScalef(1.0f, 1.0f, -1.0e-4f);
+                assertFalse(FlattenedItemLighting.applies(), "no bake outside a TESR dispatch");
+
+                TesrBatchRenderer.INSTANCE.beginScope();
+                try {
+                    assertTrue(FlattenedItemLighting.applies(), "a lit, flattened draw inside a TESR while the pack draws the world is baked");
+
+                    FlattenedItemLighting.setPreLitText(true);
+                    try {
+                        assertFalse(FlattenedItemLighting.applies(), "text the font already lit must not be lit a second time");
+                    } finally {
+                        FlattenedItemLighting.setPreLitText(false);
+                    }
+                    assertTrue(FlattenedItemLighting.applies(), "clearing the pre-lit flag restores the bake");
+
+                    drawing[0] = false;
+                    assertFalse(FlattenedItemLighting.applies(), "no bake while the pack is not drawing the world");
+                } finally {
+                    TesrBatchRenderer.INSTANCE.endScope();
+                }
+            } finally {
+                GLSMMatrices.glPopMatrix();
+            }
+        });
+    }
+
+    /** Runs a test with a simulated shader pack state. */
     private static void withPack(boolean initiallyDrawing, Consumer<boolean[]> body) {
         final PipelineManager manager = Iris.getPipelineManager();
         final WorldRenderingPipeline previous = manager.getPipelineNullable();
