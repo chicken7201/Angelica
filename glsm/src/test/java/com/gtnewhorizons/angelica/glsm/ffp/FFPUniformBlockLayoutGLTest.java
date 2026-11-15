@@ -88,7 +88,7 @@ class FFPUniformBlockLayoutGLTest {
         final VertexKey base = VertexKey.fromState(false, false, false, false, 0);
         final VertexKey weather = VertexKey.fromPacked(VertexKey.withInstancing(base.pack(), Instancing.WEATHER));
         final String source = VertexShaderGenerator.generate(weather);
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 4; i++) {
             assertTrue(source.contains("uniform vec4 u_WeatherParams" + i + ";"));
         }
 
@@ -105,8 +105,10 @@ class FFPUniformBlockLayoutGLTest {
             final int third = GL20.glGetUniformLocation(program.getProgramId(), "u_WeatherParams2");
             assertNotEquals(-1, first);
             assertNotEquals(-1, third);
+            final int fourth = GL20.glGetUniformLocation(program.getProgramId(), "u_WeatherParams3");
+            assertNotEquals(-1, fourth);
 
-            WeatherParams.set(1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f, 10.0f, 11.0f);
+            WeatherParams.set(1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 1033, 11.0f, 2058, 12.0f, 13.0f);
             GL20.glUseProgram(program.getProgramId());
             program.uploadWeatherParams();
 
@@ -116,7 +118,11 @@ class FFPUniformBlockLayoutGLTest {
             assertEquals(4.0f, value.get(3));
             GL20.glGetUniform(program.getProgramId(), third, value);
             assertEquals(9.0f, value.get(0));
+            assertEquals(10.0f, value.get(1));
             assertEquals(11.0f, value.get(2));
+            assertEquals(12.0f, value.get(3));
+            GL20.glGetUniform(program.getProgramId(), fourth, value);
+            assertEquals(13.0f, value.get(0));
         } finally {
             GL20.glUseProgram(previousProgram);
             program.destroy();

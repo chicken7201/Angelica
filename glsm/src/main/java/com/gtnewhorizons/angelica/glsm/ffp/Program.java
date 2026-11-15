@@ -35,7 +35,7 @@ public class Program {
     @Getter private final FragmentKey fragmentKey;
 
     public final int[] locSampler = { -1, -1, -1, -1 };
-    private final int[] locWeather = { -1, -1, -1 };
+    private final int[] locWeather = { -1, -1, -1, -1 };
     private int weatherGeneration = Integer.MIN_VALUE;
 
     /** Caches sampler and weather-only uniform locations for this linked FFP variant. */
@@ -65,8 +65,11 @@ public class Program {
                 WeatherParams.partialTicks, WeatherParams.age);
         }
         if (locWeather[2] != -1) {
-            RENDER_BACKEND.uniform4f(locWeather[2], WeatherParams.rainScroll, WeatherParams.snowScroll,
-                WeatherParams.rainStrength, 0.0f);
+            RENDER_BACKEND.uniform4f(locWeather[2], WeatherParams.vanillaTick, WeatherParams.providerTick,
+                WeatherParams.rainStrength, WeatherParams.providerAge);
+        }
+        if (locWeather[3] != -1) {
+            RENDER_BACKEND.uniform4f(locWeather[3], WeatherParams.providerInvRadius, 0.0f, 0.0f, 0.0f);
         }
         weatherGeneration = WeatherParams.generation;
     }

@@ -103,6 +103,7 @@ public final class VertexShaderGenerator {
             sb.append("uniform vec4 u_WeatherParams0;\n");
             sb.append("uniform vec4 u_WeatherParams1;\n");
             sb.append("uniform vec4 u_WeatherParams2;\n");
+            sb.append("uniform vec4 u_WeatherParams3;\n");
         }
         sb.append('\n');
     }

@@ -30,10 +30,12 @@ public class ModStatus {
     public static boolean isBaublesLoaded;
     public static boolean isCosmeticArmorReworkedLoaded;
     public static boolean isFluidLoggedLoaded;
+    public static boolean isLiquidLoggedLoaded;
     public static boolean isCubicChunksLoaded;
     public static boolean isBOPLoaded;
     public static boolean isEtFuturumLoaded;
 
+    /** Detects optional mods before their rendering integrations are enabled. */
     public static void preInit() {
         if (Loader.isModLoaded("backhand")) {
             isBackhandLoaded = BackhandReflectionCompat.isBackhandLoaded();
@@ -51,6 +53,7 @@ public class ModStatus {
         isBaublesLoaded = Loader.isModLoaded("Baubles");
         isCosmeticArmorReworkedLoaded = Loader.isModLoaded("cosmeticarmorreworked");
         isFluidLoggedLoaded = Loader.isModLoaded("fluidlogged");
+        isLiquidLoggedLoaded = Loader.isModLoaded("liquidlogged");
         isCubicChunksLoaded = Loader.isModLoaded("cubicchunks");
         isEtFuturumLoaded = Loader.isModLoaded("etfuturum");
 

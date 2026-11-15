@@ -35,6 +35,7 @@ public class IrisInternalUniforms {
         return GLSMDepthStencilAlpha.getAlphaState().getReference();
     }
 
+    /** Handles get effective alpha func. */
     private static int getEffectiveAlphaFunc() {
         if (!GLSMDepthStencilAlpha.getAlphaTest().isEnabled()) return 7;
         final int func = GLSMDepthStencilAlpha.getAlphaState().getFunction();
@@ -44,14 +45,18 @@ public class IrisInternalUniforms {
     private static final Vector4f WEATHER_0 = new Vector4f();
     private static final Vector4f WEATHER_1 = new Vector4f();
     private static final Vector4f WEATHER_2 = new Vector4f();
+    private static final Vector4f WEATHER_3 = new Vector4f();
 
+    /** Handles add weather uniforms. */
     public static void addWeatherUniforms(DynamicUniformHolder uniforms) {
         uniforms.uniform4f(PER_FRAME, "iris_WeatherParams0", () -> WEATHER_0.set(
             WeatherParams.translateX, WeatherParams.translateY, WeatherParams.translateZ, WeatherParams.invRadius));
         uniforms.uniform4f(PER_FRAME, "iris_WeatherParams1", () -> WEATHER_1.set(
             WeatherParams.cameraFracX, WeatherParams.cameraFracZ, WeatherParams.partialTicks, WeatherParams.age));
         uniforms.uniform4f(PER_FRAME, "iris_WeatherParams2", () -> WEATHER_2.set(
-            WeatherParams.rainScroll, WeatherParams.snowScroll, WeatherParams.rainStrength, 0.0f));
+            WeatherParams.vanillaTick, WeatherParams.providerTick, WeatherParams.rainStrength, WeatherParams.providerAge));
+        uniforms.uniform4f(PER_FRAME, "iris_WeatherParams3", () -> WEATHER_3.set(
+            WeatherParams.providerInvRadius, 0.0f, 0.0f, 0.0f));
     }
 
     public static void addFogUniforms(DynamicUniformHolder uniforms, FogMode fogMode) {
