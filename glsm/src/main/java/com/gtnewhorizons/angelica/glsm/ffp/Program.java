@@ -2,6 +2,7 @@ package com.gtnewhorizons.angelica.glsm.ffp;
 
 import com.gtnewhorizons.angelica.config.SystemProperties;
 import com.gtnewhorizons.angelica.glsm.CompatShaderTransformer;
+import com.gtnewhorizons.angelica.glsm.DepthPeel;
 import com.gtnewhorizons.angelica.glsm.GLDebug;
 import com.gtnewhorizons.angelica.glsm.GLSMPrograms;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
@@ -37,6 +38,12 @@ public class Program {
     public final int[] locSampler = { -1, -1, -1, -1 };
     private final int[] locWeather = { -1, -1, -1, -1 };
     private int weatherGeneration = Integer.MIN_VALUE;
+    public final int locPeelDepth;
+    public final int locPeelScene;
+    private final int locPeelMode;
+    private int peelMode = -1;
+    private final int locCoverMode;
+    private int coverMode = -1;
 
     /** Caches sampler and weather-only uniform locations for this linked FFP variant. */
     Program(int programId, VertexKey vertexKey, FragmentKey fragmentKey) {
@@ -46,6 +53,10 @@ public class Program {
         for (int i = 0; i < 4; i++) {
             locSampler[i] = RENDER_BACKEND.getUniformLocation(programId, "u_Sampler" + i);
         }
+        locPeelDepth = RENDER_BACKEND.getUniformLocation(programId, "u_PeelDepth");
+        locPeelScene = RENDER_BACKEND.getUniformLocation(programId, "u_PeelScene");
+        locPeelMode = RENDER_BACKEND.getUniformLocation(programId, "u_PeelMode");
+        locCoverMode = RENDER_BACKEND.getUniformLocation(programId, "u_CoverMode");
         if (vertexKey.instancing() == Instancing.WEATHER) {
             for (int i = 0; i < locWeather.length; i++) {
                 locWeather[i] = RENDER_BACKEND.getUniformLocation(programId, "u_WeatherParams" + i);
@@ -72,6 +83,25 @@ public class Program {
             RENDER_BACKEND.uniform4f(locWeather[3], WeatherParams.providerInvRadius, 0.0f, 0.0f, 0.0f);
         }
         weatherGeneration = WeatherParams.generation;
+    }
+
+    /** Reports whether this program supports depth peeling. */
+    boolean peels() {
+        return locPeelMode != -1;
+    }
+
+    /** Updates the depth peeling mode when it changes. */
+    void syncPeelMode(int mode) {
+        if (peelMode == mode) return;
+        RENDER_BACKEND.uniform1i(locPeelMode, mode);
+        peelMode = mode;
+    }
+
+    /** Updates the coverage discard mode when it changes. */
+    void syncCoverMode(int mode) {
+        if (locCoverMode == -1 || coverMode == mode) return;
+        RENDER_BACKEND.uniform1i(locCoverMode, mode);
+        coverMode = mode;
     }
 
     public void destroy() {
@@ -128,6 +158,8 @@ public class Program {
             for (int i = 0; i < 4; i++) {
                 if (ffpProgram.locSampler[i] != -1) backend.uniform1i(ffpProgram.locSampler[i], i);
             }
+            if (ffpProgram.locPeelDepth != -1) backend.uniform1i(ffpProgram.locPeelDepth, DepthPeel.TEXTURE_UNIT);
+            if (ffpProgram.locPeelScene != -1) backend.uniform1i(ffpProgram.locPeelScene, DepthPeel.SCENE_TEXTURE_UNIT);
             if (previousProgram != 0) {
                 backend.useProgram(previousProgram);
             } else {

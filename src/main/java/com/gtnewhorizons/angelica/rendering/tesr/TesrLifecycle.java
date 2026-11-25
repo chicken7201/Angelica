@@ -11,6 +11,8 @@ public final class TesrLifecycle {
     /** Resets TesrLifecycle state for TesrLifecycle. */
     public static void reset() {
         TesrBatchRenderer.INSTANCE.clearRetained();
+        TranslucentPeel.destroy();
+        ImmediateDrawOrder.endPass();
         ModelPartBatcher.INSTANCE.clear();
         EntityTextureAtlas.INSTANCE.clear();
         DroppedItemInstancer.forgetItemDraws();

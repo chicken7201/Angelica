@@ -1,6 +1,8 @@
 package com.gtnewhorizons.angelica.glsm.backend;
 
 import com.gtnewhorizon.gtnhlib.bytebuf.MemoryUtilities;
+import com.gtnewhorizons.angelica.glsm.DepthEcho;
+import com.gtnewhorizons.angelica.glsm.DepthPeel;
 import com.gtnewhorizons.angelica.glsm.GLESFormatRemap;
 import com.gtnewhorizons.angelica.glsm.GLSMAttribStack;
 import com.gtnewhorizons.angelica.glsm.GLStateManager;
@@ -322,28 +324,245 @@ public abstract class RenderBackend {
     public abstract void logicOp(int opcode);
     public abstract void hint(int target, int mode);
 
-    public abstract void drawArrays(int mode, int first, int count);
-    public abstract void drawElements(int mode, int count, int type, long indices);
-    public void drawElements(int mode, ByteBuffer indices) {}
-    public void drawElements(int mode, IntBuffer indices) {}
-    public void drawElements(int mode, ShortBuffer indices) {}
-    public void drawElements(int mode, int count, int type, ByteBuffer indices) {}
-    public abstract void multiDrawElementsIndirect(int mode, int type, long indirect, int drawcount, int stride);
     public void multiDrawArraysIndirectCount(int mode, long indirect, long drawcount, int maxdrawcount, int stride) { throw new UnsupportedOperationException(getName() + ": indirect draw-count buffers unsupported"); }
     public void multiDrawElementsIndirectCount(int mode, int type, long indirect, long drawcount, int maxdrawcount, int stride) { throw new UnsupportedOperationException(getName() + ": indirect draw-count buffers unsupported"); }
     public abstract void copyBufferSubData(int readTarget, int writeTarget, long readOffset, long writeOffset, long size);
-    public abstract void drawElementsInstanced(int mode, int count, int type, long indices, int primcount);
-    public abstract void drawArraysInstanced(int mode, int first, int count, int primcount);
     public void provokingVertex(int provokeMode) {}
-    public abstract void drawElementsBaseVertex(int mode, int count, int type, long indices, int baseVertex);
-    public abstract void multiDrawElementsBaseVertex(int mode, long pCount, int type, long pIndices, int drawcount, long pBaseVertex);
+
+    /** Handles draw arrays. */
+    public final void drawArrays(int mode, int first, int count) {
+        if (DepthEcho.skipsDraw() || !DepthPeel.begin()) return;
+        try {
+            issueDrawArrays(mode, first, count);
+        } finally {
+            DepthPeel.end();
+        }
+        if (DepthEcho.begin()) {
+            try {
+                issueDrawArrays(mode, first, count);
+            } finally {
+                DepthEcho.end();
+            }
+        }
+    }
+
+    /** Handles draw elements. */
+    public final void drawElements(int mode, int count, int type, long indices) {
+        if (DepthEcho.skipsDraw() || !DepthPeel.begin()) return;
+        try {
+            issueDrawElements(mode, count, type, indices);
+        } finally {
+            DepthPeel.end();
+        }
+        if (DepthEcho.begin()) {
+            try {
+                issueDrawElements(mode, count, type, indices);
+            } finally {
+                DepthEcho.end();
+            }
+        }
+    }
+
+    /** Handles draw elements. */
+    public final void drawElements(int mode, ByteBuffer indices) {
+        if (DepthEcho.skipsDraw() || !DepthPeel.begin()) return;
+        try {
+            issueDrawElements(mode, indices);
+        } finally {
+            DepthPeel.end();
+        }
+        if (DepthEcho.begin()) {
+            try {
+                issueDrawElements(mode, indices);
+            } finally {
+                DepthEcho.end();
+            }
+        }
+    }
+
+    /** Handles draw elements. */
+    public final void drawElements(int mode, IntBuffer indices) {
+        if (DepthEcho.skipsDraw() || !DepthPeel.begin()) return;
+        try {
+            issueDrawElements(mode, indices);
+        } finally {
+            DepthPeel.end();
+        }
+        if (DepthEcho.begin()) {
+            try {
+                issueDrawElements(mode, indices);
+            } finally {
+                DepthEcho.end();
+            }
+        }
+    }
+
+    /** Handles draw elements. */
+    public final void drawElements(int mode, ShortBuffer indices) {
+        if (DepthEcho.skipsDraw() || !DepthPeel.begin()) return;
+        try {
+            issueDrawElements(mode, indices);
+        } finally {
+            DepthPeel.end();
+        }
+        if (DepthEcho.begin()) {
+            try {
+                issueDrawElements(mode, indices);
+            } finally {
+                DepthEcho.end();
+            }
+        }
+    }
+
+    /** Handles draw elements. */
+    public final void drawElements(int mode, int count, int type, ByteBuffer indices) {
+        if (DepthEcho.skipsDraw() || !DepthPeel.begin()) return;
+        try {
+            issueDrawElements(mode, count, type, indices);
+        } finally {
+            DepthPeel.end();
+        }
+        if (DepthEcho.begin()) {
+            try {
+                issueDrawElements(mode, count, type, indices);
+            } finally {
+                DepthEcho.end();
+            }
+        }
+    }
+
+    /** Handles multi draw elements indirect. */
+    public final void multiDrawElementsIndirect(int mode, int type, long indirect, int drawcount, int stride) {
+        if (DepthEcho.skipsDraw() || !DepthPeel.begin()) return;
+        try {
+            issueMultiDrawElementsIndirect(mode, type, indirect, drawcount, stride);
+        } finally {
+            DepthPeel.end();
+        }
+        if (DepthEcho.begin()) {
+            try {
+                issueMultiDrawElementsIndirect(mode, type, indirect, drawcount, stride);
+            } finally {
+                DepthEcho.end();
+            }
+        }
+    }
+
+    /** Handles draw elements instanced. */
+    public final void drawElementsInstanced(int mode, int count, int type, long indices, int primcount) {
+        if (DepthEcho.skipsDraw() || !DepthPeel.begin()) return;
+        try {
+            issueDrawElementsInstanced(mode, count, type, indices, primcount);
+        } finally {
+            DepthPeel.end();
+        }
+        if (DepthEcho.begin()) {
+            try {
+                issueDrawElementsInstanced(mode, count, type, indices, primcount);
+            } finally {
+                DepthEcho.end();
+            }
+        }
+    }
+
+    /** Handles draw arrays instanced. */
+    public final void drawArraysInstanced(int mode, int first, int count, int primcount) {
+        if (DepthEcho.skipsDraw() || !DepthPeel.begin()) return;
+        try {
+            issueDrawArraysInstanced(mode, first, count, primcount);
+        } finally {
+            DepthPeel.end();
+        }
+        if (DepthEcho.begin()) {
+            try {
+                issueDrawArraysInstanced(mode, first, count, primcount);
+            } finally {
+                DepthEcho.end();
+            }
+        }
+    }
+
+    /** Handles draw elements base vertex. */
+    public final void drawElementsBaseVertex(int mode, int count, int type, long indices, int baseVertex) {
+        if (DepthEcho.skipsDraw() || !DepthPeel.begin()) return;
+        try {
+            issueDrawElementsBaseVertex(mode, count, type, indices, baseVertex);
+        } finally {
+            DepthPeel.end();
+        }
+        if (DepthEcho.begin()) {
+            try {
+                issueDrawElementsBaseVertex(mode, count, type, indices, baseVertex);
+            } finally {
+                DepthEcho.end();
+            }
+        }
+    }
+
+    /** Handles multi draw elements base vertex. */
+    public final void multiDrawElementsBaseVertex(int mode, long pCount, int type, long pIndices, int drawcount, long pBaseVertex) {
+        if (DepthEcho.skipsDraw() || !DepthPeel.begin()) return;
+        try {
+            issueMultiDrawElementsBaseVertex(mode, pCount, type, pIndices, drawcount, pBaseVertex);
+        } finally {
+            DepthPeel.end();
+        }
+        if (DepthEcho.begin()) {
+            try {
+                issueMultiDrawElementsBaseVertex(mode, pCount, type, pIndices, drawcount, pBaseVertex);
+            } finally {
+                DepthEcho.end();
+            }
+        }
+    }
+
+    /** Handles multi draw arrays. */
+    public final void multiDrawArrays(int mode, IntBuffer firsts, IntBuffer counts) {
+        if (DepthEcho.skipsDraw() || !DepthPeel.begin()) return;
+        try {
+            issueMultiDrawArrays(mode, firsts, counts);
+        } finally {
+            DepthPeel.end();
+        }
+        if (DepthEcho.begin()) {
+            try {
+                issueMultiDrawArrays(mode, firsts, counts);
+            } finally {
+                DepthEcho.end();
+            }
+        }
+    }
+
+    /** Handles issue draw arrays. */
+    protected abstract void issueDrawArrays(int mode, int first, int count);
+    /** Handles issue draw elements. */
+    protected abstract void issueDrawElements(int mode, int count, int type, long indices);
+    /** Handles issue draw elements. */
+    protected void issueDrawElements(int mode, ByteBuffer indices) {}
+    /** Handles issue draw elements. */
+    protected void issueDrawElements(int mode, IntBuffer indices) {}
+    /** Handles issue draw elements. */
+    protected void issueDrawElements(int mode, ShortBuffer indices) {}
+    /** Handles issue draw elements. */
+    protected void issueDrawElements(int mode, int count, int type, ByteBuffer indices) {}
+    /** Handles issue multi draw elements indirect. */
+    protected abstract void issueMultiDrawElementsIndirect(int mode, int type, long indirect, int drawcount, int stride);
+    /** Handles issue draw elements instanced. */
+    protected abstract void issueDrawElementsInstanced(int mode, int count, int type, long indices, int primcount);
+    /** Handles issue draw arrays instanced. */
+    protected abstract void issueDrawArraysInstanced(int mode, int first, int count, int primcount);
+    /** Handles issue draw elements base vertex. */
+    protected abstract void issueDrawElementsBaseVertex(int mode, int count, int type, long indices, int baseVertex);
+    /** Handles issue multi draw elements base vertex. */
+    protected abstract void issueMultiDrawElementsBaseVertex(int mode, long pCount, int type, long pIndices, int drawcount, long pBaseVertex);
+    /** Handles issue multi draw arrays. */
+    protected abstract void issueMultiDrawArrays(int mode, IntBuffer firsts, IntBuffer counts);
     public void drawRangeElements(int mode, int start, int end, int count, int type, long indices) {
         drawElements(mode, count, type, indices);
     }
     public void drawRangeElementsBaseVertex(int mode, int start, int end, int count, int type, long indices, int baseVertex) {
         drawElementsBaseVertex(mode, count, type, indices, baseVertex);
     }
-    public abstract void multiDrawArrays(int mode, IntBuffer firsts, IntBuffer counts);
     public abstract void primitiveRestartIndex(int index);
     public abstract void pointParameterf(int pname, float param);
     public abstract void pointParameteri(int pname, int param);

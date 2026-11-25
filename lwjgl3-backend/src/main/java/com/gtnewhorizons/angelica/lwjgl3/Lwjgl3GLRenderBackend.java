@@ -492,43 +492,51 @@ public final class Lwjgl3GLRenderBackend extends RenderBackend {
         GL11C.glHint(target, mode);
     }
 
+    /** Handles issue draw arrays. */
     @Override
-    public void drawArrays(int mode, int first, int count) {
+    protected void issueDrawArrays(int mode, int first, int count) {
         GL11C.glDrawArrays(mode, first, count);
     }
 
+    /** Handles issue draw elements. */
     @Override
-    public void drawElements(int mode, int count, int type, long indices) {
+    protected void issueDrawElements(int mode, int count, int type, long indices) {
         GL11C.glDrawElements(mode, count, type, indices);
     }
 
+    /** Handles issue draw elements. */
     @Override
-    public void drawElements(int mode, ByteBuffer indices) {
+    protected void issueDrawElements(int mode, ByteBuffer indices) {
         GL11C.glDrawElements(mode, indices);
     }
 
+    /** Handles issue draw elements. */
     @Override
-    public void drawElements(int mode, IntBuffer indices) {
+    protected void issueDrawElements(int mode, IntBuffer indices) {
         GL11C.glDrawElements(mode, indices);
     }
 
+    /** Handles issue draw elements. */
     @Override
-    public void drawElements(int mode, ShortBuffer indices) {
+    protected void issueDrawElements(int mode, ShortBuffer indices) {
         GL11C.glDrawElements(mode, indices);
     }
 
+    /** Handles issue draw elements. */
     @Override
-    public void drawElements(int mode, int count, int type, ByteBuffer indices) {
+    protected void issueDrawElements(int mode, int count, int type, ByteBuffer indices) {
         GL11C.glDrawElements(mode, count, type, MemoryUtil.memAddress(indices));
     }
 
+    /** Handles issue draw elements instanced. */
     @Override
-    public void drawElementsInstanced(int mode, int count, int type, long indices, int primcount) {
+    protected void issueDrawElementsInstanced(int mode, int count, int type, long indices, int primcount) {
         GL31C.glDrawElementsInstanced(mode, count, type, indices, primcount);
     }
 
+    /** Handles issue draw arrays instanced. */
     @Override
-    public void drawArraysInstanced(int mode, int first, int count, int primcount) {
+    protected void issueDrawArraysInstanced(int mode, int first, int count, int primcount) {
         GL31C.glDrawArraysInstanced(mode, first, count, primcount);
     }
 
@@ -538,8 +546,9 @@ public final class Lwjgl3GLRenderBackend extends RenderBackend {
         GL32C.glProvokingVertex(provokeMode);
     }
 
+    /** Handles issue multi draw elements indirect. */
     @Override
-    public void multiDrawElementsIndirect(int mode, int type, long indirect, int drawcount, int stride) {
+    protected void issueMultiDrawElementsIndirect(int mode, int type, long indirect, int drawcount, int stride) {
         GL43C.glMultiDrawElementsIndirect(mode, type, indirect, drawcount, stride);
     }
 
@@ -548,13 +557,15 @@ public final class Lwjgl3GLRenderBackend extends RenderBackend {
         GL31C.glCopyBufferSubData(readTarget, writeTarget, readOffset, writeOffset, size);
     }
 
+    /** Handles issue draw elements base vertex. */
     @Override
-    public void drawElementsBaseVertex(int mode, int count, int type, long indices, int baseVertex) {
+    protected void issueDrawElementsBaseVertex(int mode, int count, int type, long indices, int baseVertex) {
         GL32C.glDrawElementsBaseVertex(mode, count, type, indices, baseVertex);
     }
 
+    /** Handles issue multi draw elements base vertex. */
     @Override
-    public void multiDrawElementsBaseVertex(int mode, long pCount, int type, long pIndices, int drawcount, long pBaseVertex) {
+    protected void issueMultiDrawElementsBaseVertex(int mode, long pCount, int type, long pIndices, int drawcount, long pBaseVertex) {
         GL32C.nglMultiDrawElementsBaseVertex(mode, pCount, type, pIndices, drawcount, pBaseVertex);
     }
 
@@ -1886,8 +1897,9 @@ public final class Lwjgl3GLRenderBackend extends RenderBackend {
         GL43C.glDebugMessageControl(source, type, severity, ids, enabled);
     }
 
+    /** Handles issue multi draw arrays. */
     @Override
-    public void multiDrawArrays(int mode, IntBuffer firsts, IntBuffer counts) {
+    protected void issueMultiDrawArrays(int mode, IntBuffer firsts, IntBuffer counts) {
         GL14C.glMultiDrawArrays(mode, firsts, counts);
     }
 
