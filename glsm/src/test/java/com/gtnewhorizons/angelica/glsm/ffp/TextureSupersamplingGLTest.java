@@ -24,6 +24,7 @@ import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL15;
 
 import java.nio.ByteBuffer;
+import java.nio.FloatBuffer;
 import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.function.IntBinaryOperator;
@@ -135,17 +136,18 @@ class TextureSupersamplingGLTest {
         GLSMRasterizer.glViewport(0, 0, 800, 600);
     }
 
+    /** Checks subpixel detail recovery and restoration without sampling on texel boundaries. */
     @ParameterizedTest
     @ValueSource(ints = {4, 16})
-    void recoversTwelveDotsAtScaleThreeAndRestoresNearestAfterward(int samples) {
-        createDotAtlas();
+    void recoversTwelveDotsAndRestoresNearestAfterward(int samples) {
+        createSamplingAtlas();
 
-        final int[] nearest = drawTop(3);
+        final int[] nearest = drawSamplingQuad();
         assertEquals(0, countDotRegions(nearest));
         final int previous = GLSMTextures.setTextureSupersamplingSamples(samples);
-        assertEquals(12, countDotRegions(drawTop(3)));
+        assertEquals(12, countDotRegions(drawSamplingQuad()));
         GLSMTextures.setTextureSupersamplingSamples(previous);
-        assertArrayEquals(nearest, drawTop(3));
+        assertArrayEquals(nearest, drawSamplingQuad());
     }
 
     @ParameterizedTest
@@ -209,11 +211,13 @@ class TextureSupersamplingGLTest {
         }
     }
 
-    @Test
-    void atlasFetchesIgnoreSamplerFilteringAndRepeatAcrossNegativeUvs() {
-        createAtlas(16, 4, TextureSupersamplingGLTest::dotColor);
-        GLSMTextures.setTextureSupersamplingSamples(16);
-        final int[] nearest = drawTop(3);
+    /** Checks sampler independence and periodic UVs using samples away from texel boundaries. */
+    @ParameterizedTest
+    @ValueSource(ints = {4, 16})
+    void atlasFetchesIgnoreSamplerFilteringAndRepeatAcrossNegativeUvs(int samples) {
+        createSamplingAtlas();
+        GLSMTextures.setTextureSupersamplingSamples(samples);
+        final int[] nearest = drawSamplingQuad();
         final int sampler = RenderSystem.genSampler();
         try {
             RenderSystem.samplerParameteri(sampler, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR);
@@ -224,7 +228,7 @@ class TextureSupersamplingGLTest {
             GLSMMatrices.glMatrixMode(GL11.GL_TEXTURE);
             GLSMMatrices.glTranslatef(-2, 3, 0);
             GLSMMatrices.glMatrixMode(GL11.GL_MODELVIEW);
-            assertArrayEquals(nearest, drawTop(3));
+            assertArrayEquals(nearest, drawSamplingQuad());
         } finally {
             GLSMMatrices.glMatrixMode(GL11.GL_TEXTURE);
             GLSMMatrices.glLoadIdentity();
@@ -270,6 +274,30 @@ class TextureSupersamplingGLTest {
 
     private void createDotAtlas() {
         createAtlas(16, TextureSupersamplingGLTest::dotColor);
+    }
+
+    /** Places twelve isolated texels between the nearest-sampling positions of a half-size quad. */
+    private void createSamplingAtlas() {
+        createAtlas(64, 4, (x, y) -> {
+            final boolean column = x == 3 || x == 11 || x == 19 || x == 27;
+            final boolean row = y == 3 || y == 11 || y == 19 || y == 27;
+            return column && row && (x == 3 || x == 27 || y == 3 || y == 27) ? 0x444444FF : 0xFFFFFFFF;
+        });
+    }
+
+    /** Minifies by two with an exact axis permutation and a phase clear of all sample boundaries. */
+    private int[] drawSamplingQuad() {
+        FfpFixture.clear();
+        final FloatBuffer matrix = BufferUtils.createFloatBuffer(16);
+        matrix.put(new float[] {
+            32, 0, 0, 0,
+            0, 0, 1, 0,
+            0, -32, 0, 0,
+            100.1f, 100.1f, 0, 1
+        }).flip();
+        GLSMMatrices.glLoadMatrix(matrix);
+        GLSMDraws.glDrawArrays(GL11.GL_QUADS, 0, 4);
+        return FfpFixture.readRegion(SIZE);
     }
 
     private void createAtlas(int spriteSize, IntBinaryOperator color) {
