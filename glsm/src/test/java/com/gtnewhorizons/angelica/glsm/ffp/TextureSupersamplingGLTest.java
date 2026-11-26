@@ -6,6 +6,7 @@ import com.gtnewhorizons.angelica.glsm.GLSMBuffers;
 import com.gtnewhorizons.angelica.glsm.GLSMCurrentAttribs;
 import com.gtnewhorizons.angelica.glsm.GLSMDraws;
 import com.gtnewhorizons.angelica.glsm.GLSMEnable;
+import com.gtnewhorizons.angelica.glsm.GLSMFramebuffer;
 import com.gtnewhorizons.angelica.glsm.GLSMMatrices;
 import com.gtnewhorizons.angelica.glsm.GLSMRasterizer;
 import com.gtnewhorizons.angelica.glsm.GLSMTexEnvGen;
@@ -22,9 +23,9 @@ import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL15;
+import org.lwjgl.opengl.GL30;
 
 import java.nio.ByteBuffer;
-import java.nio.FloatBuffer;
 import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.function.IntBinaryOperator;
@@ -42,6 +43,11 @@ class TextureSupersamplingGLTest {
     private int texture;
     private int vao;
     private int vbo;
+    private int framebuffer;
+    private int colorBuffer;
+    private int previousDrawFramebuffer;
+    private int previousReadFramebuffer;
+    private int previousRenderbuffer;
 
     private static int dotColor(int x, int y) {
         final boolean dot = (x == 3 || x == 6 || x == 9 || x == 12)
@@ -104,9 +110,21 @@ class TextureSupersamplingGLTest {
         return regions;
     }
 
+    /** Creates an isolated RGBA8 render target and initializes the sampling state. */
     @BeforeEach
     void setup() {
         FfpFixture.resetFfpState();
+        previousDrawFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+        previousReadFramebuffer = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
+        previousRenderbuffer = GL11.glGetInteger(GL30.GL_RENDERBUFFER_BINDING);
+        colorBuffer = GLSMFramebuffer.glGenRenderbuffers();
+        GLSMFramebuffer.glBindRenderbuffer(GL30.GL_RENDERBUFFER, colorBuffer);
+        GLSMFramebuffer.glRenderbufferStorage(GL30.GL_RENDERBUFFER, GL11.GL_RGBA8, SIZE, SIZE);
+        framebuffer = GLSMFramebuffer.glGenFramebuffers();
+        GLSMFramebuffer.glBindFramebuffer(GL30.GL_FRAMEBUFFER, framebuffer);
+        GLSMFramebuffer.glFramebufferRenderbuffer(GL30.GL_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0,
+            GL30.GL_RENDERBUFFER, colorBuffer);
+        assertEquals(GL30.GL_FRAMEBUFFER_COMPLETE, GLSMFramebuffer.glCheckFramebufferStatus(GL30.GL_FRAMEBUFFER));
         GLSMTextures.setTextureSupersamplingSamples(1);
         GLSMEnable.glDisable(GL11.GL_LIGHTING);
         GLSMEnable.glDisable(GL11.GL_FOG);
@@ -121,6 +139,7 @@ class TextureSupersamplingGLTest {
         FfpFixture.activateFfp();
     }
 
+    /** Releases the private render target and restores the caller's framebuffer bindings. */
     @AfterEach
     void cleanup() {
         GLSMTextures.setTextureSupersamplingSamples(1);
@@ -134,20 +153,25 @@ class TextureSupersamplingGLTest {
         GLSMMatrices.glMatrixMode(GL11.GL_MODELVIEW);
         GLSMMatrices.glLoadIdentity();
         GLSMRasterizer.glViewport(0, 0, 800, 600);
+        GLSMFramebuffer.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
+        GLSMFramebuffer.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousReadFramebuffer);
+        GLSMFramebuffer.glBindRenderbuffer(GL30.GL_RENDERBUFFER, previousRenderbuffer);
+        if (framebuffer != 0) GLSMFramebuffer.glDeleteFramebuffers(framebuffer);
+        if (colorBuffer != 0) GLSMFramebuffer.glDeleteRenderbuffers(colorBuffer);
     }
 
-    /** Checks subpixel detail recovery and restoration without sampling on texel boundaries. */
+    /** Checks detail recovery on the original oblique quad and restoration of nearest sampling. */
     @ParameterizedTest
     @ValueSource(ints = {4, 16})
-    void recoversTwelveDotsAndRestoresNearestAfterward(int samples) {
-        createSamplingAtlas();
+    void recoversTwelveDotsAtScaleThreeAndRestoresNearestAfterward(int samples) {
+        createDotAtlas();
 
-        final int[] nearest = drawSamplingQuad();
+        final int[] nearest = drawTop(3);
         assertEquals(0, countDotRegions(nearest));
         final int previous = GLSMTextures.setTextureSupersamplingSamples(samples);
-        assertEquals(12, countDotRegions(drawSamplingQuad()));
+        assertEquals(12, countDotRegions(drawTop(3)));
         GLSMTextures.setTextureSupersamplingSamples(previous);
-        assertArrayEquals(nearest, drawSamplingQuad());
+        assertArrayEquals(nearest, drawTop(3));
     }
 
     @ParameterizedTest
@@ -211,13 +235,13 @@ class TextureSupersamplingGLTest {
         }
     }
 
-    /** Checks sampler independence and periodic UVs using samples away from texel boundaries. */
+    /** Checks sampler independence and periodic UVs on the original oblique quad. */
     @ParameterizedTest
     @ValueSource(ints = {4, 16})
     void atlasFetchesIgnoreSamplerFilteringAndRepeatAcrossNegativeUvs(int samples) {
-        createSamplingAtlas();
+        createAtlas(16, 4, TextureSupersamplingGLTest::dotColor);
         GLSMTextures.setTextureSupersamplingSamples(samples);
-        final int[] nearest = drawSamplingQuad();
+        final int[] nearest = drawTop(3);
         final int sampler = RenderSystem.genSampler();
         try {
             RenderSystem.samplerParameteri(sampler, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR);
@@ -228,7 +252,7 @@ class TextureSupersamplingGLTest {
             GLSMMatrices.glMatrixMode(GL11.GL_TEXTURE);
             GLSMMatrices.glTranslatef(-2, 3, 0);
             GLSMMatrices.glMatrixMode(GL11.GL_MODELVIEW);
-            assertArrayEquals(nearest, drawSamplingQuad());
+            assertArrayEquals(nearest, drawTop(3));
         } finally {
             GLSMMatrices.glMatrixMode(GL11.GL_TEXTURE);
             GLSMMatrices.glLoadIdentity();
@@ -274,30 +298,6 @@ class TextureSupersamplingGLTest {
 
     private void createDotAtlas() {
         createAtlas(16, TextureSupersamplingGLTest::dotColor);
-    }
-
-    /** Places twelve isolated texels between the nearest-sampling positions of a half-size quad. */
-    private void createSamplingAtlas() {
-        createAtlas(64, 4, (x, y) -> {
-            final boolean column = x == 3 || x == 11 || x == 19 || x == 27;
-            final boolean row = y == 3 || y == 11 || y == 19 || y == 27;
-            return column && row && (x == 3 || x == 27 || y == 3 || y == 27) ? 0x444444FF : 0xFFFFFFFF;
-        });
-    }
-
-    /** Minifies by two with an exact axis permutation and a phase clear of all sample boundaries. */
-    private int[] drawSamplingQuad() {
-        FfpFixture.clear();
-        final FloatBuffer matrix = BufferUtils.createFloatBuffer(16);
-        matrix.put(new float[] {
-            32, 0, 0, 0,
-            0, 0, 1, 0,
-            0, -32, 0, 0,
-            100.1f, 100.1f, 0, 1
-        }).flip();
-        GLSMMatrices.glLoadMatrix(matrix);
-        GLSMDraws.glDrawArrays(GL11.GL_QUADS, 0, 4);
-        return FfpFixture.readRegion(SIZE);
     }
 
     private void createAtlas(int spriteSize, IntBinaryOperator color) {
